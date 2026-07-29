@@ -26,6 +26,7 @@
 - Geometry tests must verify right-side-strip containment, full work-area height, non-overlap with active poker tables, and specifically that one or two tables never cause Fill space to select a bottom band.
 - Geometry tests must verify that layouts above four tables preserve slots 1–4 as `(1,2)/(3,4)` and extend right with vertical pairs `5/6` and `7/8`.
 - Unit tests must keep the outer shell identity free of `ClubGG` so third-party poker hooks do not target the arranger.
+- Unit tests must verify the shared icon retains its blue field, spade silhouette, and centered white plus.
 
 # Work Guidance
 

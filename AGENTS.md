@@ -84,6 +84,7 @@ Default section order:
 - Clicking one managed poker table number selects it; clicking another table number changes the controller's table order, immediately swaps display slots, and persists the new order. Clicking the selected number again cancels selection.
 - Target ClubGG first and keep discovery profiles extensible for future GGPoker support.
 - Keep the executable, PE metadata, app ID, top-level panel title, and tray identity neutral: use **Table Arranger Control** rather than `ClubGG`. Third-party hand converters may otherwise mistake the arranger for the poker client and inject incompatible ClubGG hooks.
+- Use one shared app-icon definition for the executable, window, and tray: a royal-blue field with a dark-blue spade silhouette and a centered white plus.
 - Deliver manually launched, portable `x86_64-pc-windows-msvc` release executables under `dist/` without an installer or startup registration. Keep `Table-Arranger-Control.exe` as the current release and a matching `Table-Arranger-Control-<version>.exe` archive.
 
 ## Dependency Policy
@@ -139,6 +140,7 @@ Before delivery, run:
 - Launch manually and deliver a portable executable only.
 - Keep every delivered release in `dist/`, replacing the stale current executable before publishing while retaining versioned archives by default.
 - Preserve the neutral Table Arranger Control shell identity for compatibility with Asian Hand Converter and similar software.
+- Keep the executable, window, and tray icon blue with a spade silhouette and a centered white plus.
 - Launch release builds as administrator through the embedded manifest.
 - Keep the panel compact and modern: a narrow command rail, spatial poker-table tiles, a separate ordinary-window area, fixed contextual controls, and secondary settings in a popup.
 - Keep the workspace visually structured and space-efficient: align the first poker and ordinary-window cards with the Auto button, omit section descriptions, and separate active poker tables from parked and ignored poker windows with spacing and a divider.

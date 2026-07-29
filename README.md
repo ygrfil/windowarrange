@@ -37,6 +37,8 @@ Release builds always request administrator privileges because Windows otherwise
 
 The outer process and panel are deliberately named **Table Arranger Control**. Some poker hand-converter software injects ClubGG-specific hooks into any process whose executable or window identity contains `ClubGG`; the neutral shell identity prevents the arranger from being mistaken for the poker client.
 
+The executable, window, and tray share a blue spade icon with a white plus in the center.
+
 Runtime diagnostics are written to:
 
 ```text

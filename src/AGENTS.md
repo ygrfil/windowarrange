@@ -27,6 +27,7 @@
 - Apply the Windows legacy extension-point mitigation before initializing the GUI, hooks, hotkeys, or tray.
 - Do not put `ClubGG` back into the executable name, PE metadata, app ID, top-level panel title, or tray identity; ClubGG-specific labels may remain inside the control panel.
 - Release resources require administrator startup; build-script resources keep debug and test artifacts `asInvoker`.
+- `assets/icon.rs` is the single pixel source for the executable, window, and tray icon. Keep its royal-blue field, dark-blue spade silhouette, and centered white plus consistent across all surfaces.
 - Preserve candidate session order regardless of window coordinates. The UI groups selected windows, parked tables, and ignored windows in that order while preserving session order inside each group.
 - The main panel uses a top-aligned horizontal workspace board. Its left rail owns Auto, Arrange, Refresh, and Settings; the poker board separates active and inactive two-column groups with a thin divider but no section labels; the ordinary-window board owns compact unlabeled application cards. The first cards align vertically with Auto. Display selection, status, Locate, tray hiding, and settings remain available.
 - The top bar must remain content-height and never consume the workspace height. Apply top alignment to the workspace columns, not to the header row containing the right-to-left display controls.

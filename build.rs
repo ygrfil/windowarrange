@@ -1,8 +1,12 @@
+#[path = "assets/icon.rs"]
+mod app_icon;
+
 #[cfg(target_os = "windows")]
 fn main() {
     use std::{borrow::Cow, env, fs, path::PathBuf};
 
     println!("cargo:rerun-if-changed=assets/app.manifest");
+    println!("cargo:rerun-if-changed=assets/icon.rs");
     println!("cargo:rerun-if-changed=build.rs");
 
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR must be set"));
@@ -31,8 +35,8 @@ fn main() {}
 
 #[cfg(target_os = "windows")]
 fn make_icon() -> Vec<u8> {
-    const WIDTH: usize = 32;
-    const HEIGHT: usize = 32;
+    const WIDTH: usize = app_icon::SIZE as usize;
+    const HEIGHT: usize = app_icon::SIZE as usize;
     const PIXELS: usize = WIDTH * HEIGHT * 4;
     const MASK: usize = HEIGHT * 4;
     const IMAGE_BYTES: usize = 40 + PIXELS + MASK;
@@ -65,21 +69,8 @@ fn make_icon() -> Vec<u8> {
 
     for y in (0..HEIGHT).rev() {
         for x in 0..WIDTH {
-            let border = x < 2 || y < 2 || x >= WIDTH - 2 || y >= HEIGHT - 2;
-            let grid = (x == 15 || x == 16 || y == 15 || y == 16)
-                && (4..28).contains(&x)
-                && (4..28).contains(&y);
-            let table = (4..28).contains(&x) && (4..28).contains(&y);
-            let (r, g, b) = if border {
-                (17, 24, 39)
-            } else if grid {
-                (244, 248, 255)
-            } else if table {
-                (22, 163, 74)
-            } else {
-                (34, 197, 94)
-            };
-            icon.extend_from_slice(&[b, g, r, 255]);
+            let [red, green, blue, alpha] = app_icon::rgba_pixel(x as u32, y as u32);
+            icon.extend_from_slice(&[blue, green, red, alpha]);
         }
     }
     icon.resize(icon.len() + MASK, 0);

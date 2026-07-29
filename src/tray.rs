@@ -5,6 +5,9 @@ use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem},
 };
 
+#[path = "../assets/icon.rs"]
+mod app_icon;
+
 use crate::identity::PRODUCT_NAME;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,62 +75,39 @@ impl TrayService {
 }
 
 fn make_icon() -> Result<tray_icon::Icon, String> {
-    const SIZE: u32 = 32;
-    let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let border = x < 2 || y < 2 || x >= SIZE - 2 || y >= SIZE - 2;
-            let grid = (x == 15 || x == 16 || y == 15 || y == 16)
-                && (4..28).contains(&x)
-                && (4..28).contains(&y);
-            let table = (4..28).contains(&x) && (4..28).contains(&y);
-            let color = if border {
-                [17, 24, 39, 255]
-            } else if grid {
-                [244, 248, 255, 255]
-            } else if table {
-                [22, 163, 74, 255]
-            } else {
-                [34, 197, 94, 255]
-            };
-            rgba.extend_from_slice(&color);
-        }
-    }
-    tray_icon::Icon::from_rgba(rgba, SIZE, SIZE).map_err(|error| error.to_string())
+    tray_icon::Icon::from_rgba(make_rgba(), app_icon::SIZE, app_icon::SIZE)
+        .map_err(|error| error.to_string())
 }
 
 #[must_use]
 pub fn egui_icon() -> egui::IconData {
-    const SIZE: u32 = 32;
     let icon = make_rgba();
     egui::IconData {
         rgba: icon,
-        width: SIZE,
-        height: SIZE,
+        width: app_icon::SIZE,
+        height: app_icon::SIZE,
     }
 }
 
 fn make_rgba() -> Vec<u8> {
-    const SIZE: u32 = 32;
-    let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let border = x < 2 || y < 2 || x >= SIZE - 2 || y >= SIZE - 2;
-            let grid = (x == 15 || x == 16 || y == 15 || y == 16)
-                && (4..28).contains(&x)
-                && (4..28).contains(&y);
-            let table = (4..28).contains(&x) && (4..28).contains(&y);
-            let color = if border {
-                [17, 24, 39, 255]
-            } else if grid {
-                [244, 248, 255, 255]
-            } else if table {
-                [22, 163, 74, 255]
-            } else {
-                [34, 197, 94, 255]
-            };
-            rgba.extend_from_slice(&color);
+    let mut rgba = Vec::with_capacity((app_icon::SIZE * app_icon::SIZE * 4) as usize);
+    for y in 0..app_icon::SIZE {
+        for x in 0..app_icon::SIZE {
+            rgba.extend_from_slice(&app_icon::rgba_pixel(x, y));
         }
     }
     rgba
+}
+
+#[cfg(test)]
+mod tests {
+    use super::app_icon;
+
+    #[test]
+    fn icon_is_blue_with_a_spade_and_centered_white_plus() {
+        assert_eq!(app_icon::rgba_pixel(3, 3), [37, 99, 235, 255]);
+        assert_eq!(app_icon::rgba_pixel(15, 5), [15, 45, 95, 255]);
+        assert_eq!(app_icon::rgba_pixel(15, 15), [255, 255, 255, 255]);
+        assert_eq!(app_icon::rgba_pixel(10, 15), [255, 255, 255, 255]);
+    }
 }
