@@ -1,12 +1,12 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, Sender, bounded};
 use eframe::egui;
 use tracing::{error, info, warn};
 
 use crate::{
     config::{AppConfig, ConfigStore, HotkeySettings},
-    controller::{ControllerCommand, ControllerHandle, spawn_controller},
+    controller::{ControllerCommand, ControllerHandle, spawn_controller_with_waker},
     hotkeys::{HotkeyAction, HotkeyService},
     identity::{APP_ID, PANEL_TITLE},
     logging,
@@ -22,6 +22,7 @@ const ACCENT: egui::Color32 = egui::Color32::from_rgb(22, 163, 74);
 const PARKED: egui::Color32 = egui::Color32::from_rgb(217, 119, 6);
 const TOP_RIGHT: egui::Color32 = egui::Color32::from_rgb(37, 99, 235);
 const FREE_SPACE: egui::Color32 = egui::Color32::from_rgb(124, 58, 237);
+const BACKGROUND_EVENT_QUEUE_CAPACITY: usize = 16;
 
 pub fn run() {
     let mitigation_result = apply_process_mitigations();
@@ -67,8 +68,6 @@ pub fn run() {
     };
     let hotkey_settings = config.hotkeys.clone();
     let backend = Win32Backend::new();
-    let controller = spawn_controller(backend, config, store.clone());
-    spawn_window_event_watcher(controller.commands.clone());
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -90,6 +89,14 @@ pub fn run() {
         PANEL_TITLE,
         options,
         Box::new(move |creation| {
+            let repaint_context = creation.egui_ctx.clone();
+            let controller = spawn_controller_with_waker(
+                backend,
+                config,
+                store,
+                Arc::new(move || repaint_context.request_repaint()),
+            );
+            spawn_window_event_watcher(controller.commands.clone());
             Ok(Box::new(TableArrangerApp::new(
                 creation,
                 controller,
@@ -124,8 +131,8 @@ impl TableArrangerApp {
         hotkey_settings: HotkeySettings,
     ) -> Self {
         configure_style(&creation.egui_ctx);
-        let (hotkey_tx, hotkey_rx) = unbounded();
-        let (tray_tx, tray_rx) = unbounded();
+        let (hotkey_tx, hotkey_rx) = bounded(BACKGROUND_EVENT_QUEUE_CAPACITY);
+        let (tray_tx, tray_rx) = bounded(BACKGROUND_EVENT_QUEUE_CAPACITY);
 
         let (hotkeys, shortcut_errors) =
             match HotkeyService::new(&hotkey_settings, creation.egui_ctx.clone(), hotkey_tx) {
@@ -826,7 +833,6 @@ impl TableArrangerApp {
 impl eframe::App for TableArrangerApp {
     fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_background_events(context);
-        context.request_repaint_after(Duration::from_millis(150));
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -844,7 +850,7 @@ impl eframe::App for TableArrangerApp {
         }
     }
 
-    fn on_exit(&mut self) {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.send(ControllerCommand::Shutdown);
         info!("Table Arranger Control stopped");
     }

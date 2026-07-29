@@ -80,6 +80,7 @@ Default section order:
 - Refresh must reconcile discovery and immediately reapply all selected poker and ordinary-window placement. Enabling Auto must also immediately apply the complete workspace.
 - Present a compact horizontal workspace board: a narrow Auto/Arrange/Refresh/Settings rail, draggable poker-table tiles, a separate ordinary-window area, display selection, status, Locate, and tray access.
 - Keep the panel responsive within a compact 680×350 minimum and 820×460 maximum, disable maximizing, fill the full viewport background, and show the complete main workspace without scroll areas. Use dense two-column grids and constrain every tile to its pane.
+- Keep the compact controller resource-efficient: use the eframe Glow renderer, wake the UI from actual state and input events, and bound/coalesce background event delivery.
 - Dragging one managed poker tile onto another changes the controller's table order, immediately swaps display slots, and persists the new order.
 - Target ClubGG first and keep discovery profiles extensible for future GGPoker support.
 - Keep the executable, PE metadata, app ID, top-level panel title, and tray identity neutral: use **Table Arranger Control** rather than `ClubGG`. Third-party hand converters may otherwise mistake the arranger for the poker client and inject incompatible ClubGG hooks.
@@ -93,7 +94,7 @@ Default section order:
 - Disable default features when practical and enable only required Windows functionality.
 - Commit `Cargo.lock` and treat it as the exact reproducible dependency graph.
 - If the newest stable release is incompatible, use the newest verified stable release and record the reason here.
-- Duplicated transitive dependency families introduced by WGPU/eframe, Windows support crates, and development-only property testing are expected and reviewed with `cargo tree -d`; do not force-deduplicate incompatible semantic versions.
+- Duplicated transitive dependency families introduced by eframe/Glutin, Windows support crates, and development-only property testing are expected and reviewed with `cargo tree -d`; do not force-deduplicate incompatible semantic versions.
 
 ## Repository Workflow
 
@@ -144,6 +145,7 @@ Before delivery, run:
 - Keep Fill-space application windows strictly to the right of active poker tables for every table count, including one or two; never choose a larger empty band underneath the tables.
 - Remember ordinary-window behavior across restarts even when its title changes, and remember table order after mouse drag-and-drop.
 - Keep every primary rail action visible without overlap and avoid decorative glyphs that are missing from the bundled font.
+- Keep idle RAM, GPU-memory, and CPU use proportionate to a compact control utility without weakening window-event responsiveness.
 
 ## Child DOX Index
 

@@ -1,11 +1,14 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
 
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, Sender, bounded};
 use tracing::{info, warn};
 
 use crate::{
@@ -17,14 +20,18 @@ use crate::{
     },
 };
 
-const RECONCILE_INTERVAL: Duration = Duration::from_millis(750);
+const FALLBACK_RECONCILE_INTERVAL: Duration = Duration::from_secs(10);
 const REFLOW_DEBOUNCE: Duration = Duration::from_millis(500);
+const COMMAND_QUEUE_CAPACITY: usize = 64;
+const SNAPSHOT_QUEUE_CAPACITY: usize = 1;
+
+pub type UiWake = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Clone, Debug)]
 pub enum ControllerCommand {
     ForceArrange,
     Refresh,
-    NativeWindowEvent,
+    NativeWindowEvent(&'static AtomicBool),
     SetAutoArrange(bool),
     SetEnabled { id: WindowId, enabled: bool },
     ToggleFocused,
@@ -48,11 +55,32 @@ pub fn spawn_controller(
     config: AppConfig,
     store: ConfigStore,
 ) -> ControllerHandle {
-    let (command_tx, command_rx) = unbounded();
-    let (snapshot_tx, snapshot_rx) = unbounded();
+    spawn_controller_with_waker(backend, config, store, Arc::new(|| {}))
+}
+
+#[must_use]
+pub fn spawn_controller_with_waker(
+    backend: Arc<dyn WindowBackend>,
+    config: AppConfig,
+    store: ConfigStore,
+    wake_ui: UiWake,
+) -> ControllerHandle {
+    let (command_tx, command_rx) = bounded(COMMAND_QUEUE_CAPACITY);
+    let (snapshot_tx, snapshot_rx) = bounded(SNAPSHOT_QUEUE_CAPACITY);
+    let stale_snapshot_rx = snapshot_rx.clone();
     thread::Builder::new()
         .name("clubgg-controller".to_owned())
-        .spawn(move || Controller::new(backend, config, store, snapshot_tx).run(command_rx))
+        .spawn(move || {
+            Controller::new(
+                backend,
+                config,
+                store,
+                snapshot_tx,
+                stale_snapshot_rx,
+                wake_ui,
+            )
+            .run(command_rx);
+        })
         .expect("controller thread must start");
     ControllerHandle {
         commands: command_tx,
@@ -65,12 +93,16 @@ struct Controller {
     config: AppConfig,
     store: ConfigStore,
     snapshot_tx: Sender<UiSnapshot>,
+    stale_snapshot_rx: Receiver<UiSnapshot>,
+    wake_ui: UiWake,
+    last_published: Option<UiSnapshot>,
     tables: Vec<ManagedTable>,
     candidates: Vec<WindowCandidate>,
     window_statuses: HashMap<WindowId, TableStatus>,
     monitors: Vec<MonitorInfo>,
     dirty_since: Option<Instant>,
     last_reconcile: Instant,
+    native_event_pending: Option<&'static AtomicBool>,
     status_message: String,
 }
 
@@ -80,18 +112,24 @@ impl Controller {
         config: AppConfig,
         store: ConfigStore,
         snapshot_tx: Sender<UiSnapshot>,
+        stale_snapshot_rx: Receiver<UiSnapshot>,
+        wake_ui: UiWake,
     ) -> Self {
         Self {
             backend,
             config,
             store,
             snapshot_tx,
+            stale_snapshot_rx,
+            wake_ui,
+            last_published: None,
             tables: Vec::new(),
             candidates: Vec::new(),
             window_statuses: HashMap::new(),
             monitors: Vec::new(),
             dirty_since: None,
-            last_reconcile: Instant::now() - RECONCILE_INTERVAL,
+            last_reconcile: Instant::now() - FALLBACK_RECONCILE_INTERVAL,
+            native_event_pending: None,
             status_message: "Looking for ClubGG tables…".to_owned(),
         }
     }
@@ -101,7 +139,7 @@ impl Controller {
         self.publish();
 
         loop {
-            match commands.recv_timeout(Duration::from_millis(100)) {
+            match commands.recv_timeout(self.next_wait()) {
                 Ok(ControllerCommand::Shutdown) => break,
                 Ok(command) => self.handle(command),
                 Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
@@ -115,7 +153,10 @@ impl Controller {
                 self.handle(command);
             }
 
-            if self.last_reconcile.elapsed() >= RECONCILE_INTERVAL {
+            if self.last_reconcile.elapsed() >= FALLBACK_RECONCILE_INTERVAL {
+                if let Some(pending) = self.native_event_pending.take() {
+                    pending.store(false, Ordering::Release);
+                }
                 self.reconcile();
             }
 
@@ -129,6 +170,14 @@ impl Controller {
         }
     }
 
+    fn next_wait(&self) -> Duration {
+        let until_reconcile =
+            FALLBACK_RECONCILE_INTERVAL.saturating_sub(self.last_reconcile.elapsed());
+        self.dirty_since.map_or(until_reconcile, |dirty| {
+            until_reconcile.min(REFLOW_DEBOUNCE.saturating_sub(dirty.elapsed()))
+        })
+    }
+
     fn handle(&mut self, command: ControllerCommand) {
         match command {
             ControllerCommand::ForceArrange => self.arrange(),
@@ -136,8 +185,9 @@ impl Controller {
                 self.reconcile();
                 self.arrange();
             }
-            ControllerCommand::NativeWindowEvent => {
-                self.last_reconcile = Instant::now() - RECONCILE_INTERVAL;
+            ControllerCommand::NativeWindowEvent(pending) => {
+                self.native_event_pending = Some(pending);
+                self.last_reconcile = Instant::now() - FALLBACK_RECONCILE_INTERVAL;
             }
             ControllerCommand::SetAutoArrange(enabled) => {
                 self.config.auto_arrange = enabled;
@@ -722,7 +772,7 @@ impl Controller {
         }
     }
 
-    fn publish(&self) {
+    fn publish(&mut self) {
         let candidates = self
             .candidates
             .iter()
@@ -777,6 +827,14 @@ impl Controller {
             status_message: self.status_message.clone(),
             hotkeys: self.config.hotkeys.clone(),
         };
-        let _ = self.snapshot_tx.send(snapshot);
+        if self.last_published.as_ref() == Some(&snapshot) {
+            return;
+        }
+
+        while self.stale_snapshot_rx.try_recv().is_ok() {}
+        if self.snapshot_tx.try_send(snapshot.clone()).is_ok() {
+            self.last_published = Some(snapshot);
+            (self.wake_ui)();
+        }
     }
 }

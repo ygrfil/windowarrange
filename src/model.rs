@@ -122,7 +122,7 @@ impl fmt::Display for TableStatus {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ManagedTable {
     pub id: WindowId,
     pub label: String,
@@ -140,7 +140,7 @@ pub struct MonitorInfo {
     pub primary: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CandidateView {
     pub id: WindowId,
     pub label: String,
@@ -153,7 +153,7 @@ pub struct CandidateView {
     pub status: Option<TableStatus>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct UiSnapshot {
     pub tables: Vec<ManagedTable>,
     pub candidates: Vec<CandidateView>,

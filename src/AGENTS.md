@@ -36,6 +36,9 @@
 - ClubGG tiles expose **Active**, **Park**, and **Ignore**. Ordinary application cards expose **Ignore**, **Fill space**, and **Top-right**.
 - Configuration schema version 4 persists table, parked, ignored, top-right, and free-space dispositions plus table order. Ordinary-window choices write an exact signature and a process/class fallback; exact matches take priority.
 - A Refresh command reconciles immediately and arranges regardless of Auto state. Turning Auto on reconciles and arranges immediately. Native location events retain debounce and manual-movement protections.
+- Use native window events as the primary discovery trigger with a ten-second fallback reconciliation. Coalesce duplicate native events until reconciliation begins.
+- Use bounded background channels. The controller snapshot channel retains only the newest state, suppresses unchanged snapshots, and explicitly wakes egui when a new state is published; do not add a periodic UI repaint loop.
+- Use eframe's Glow renderer for the compact panel unless measurements and compatibility testing justify a different backend.
 - Poker drag-and-drop emits the same typed `Reorder` command as other reorder controls. The controller persists reordered signatures and immediately arranges; UI code never moves windows directly.
 - `layout.rs` evaluates a virtual count of four for 1–3 active tables and returns only the requested first row-major rectangles. Counts 4+ retain maximal-area grid selection.
 - `layout.rs::right_side_free_rect` returns the full-height monitor strip starting at the rightmost active poker-table edge. Fill-space application windows may overlap one another, must never use empty space below poker tables, and do not treat parked-table bounds as occupied.

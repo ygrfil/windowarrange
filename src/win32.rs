@@ -2,7 +2,10 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::c_void,
     mem::size_of,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::Duration,
 };
@@ -60,6 +63,7 @@ use crate::{
 };
 
 static WINDOW_EVENT_SENDER: OnceLock<Sender<ControllerCommand>> = OnceLock::new();
+static WINDOW_EVENT_PENDING: AtomicBool = AtomicBool::new(false);
 
 pub fn apply_process_mitigations() -> Result<(), BackendError> {
     let mut policy = PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY::default();
@@ -329,8 +333,14 @@ unsafe extern "system" fn window_event_callback(
             | EVENT_OBJECT_HIDE
             | EVENT_OBJECT_LOCATIONCHANGE
     ) && let Some(sender) = WINDOW_EVENT_SENDER.get()
+        && WINDOW_EVENT_PENDING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        && sender
+            .try_send(ControllerCommand::NativeWindowEvent(&WINDOW_EVENT_PENDING))
+            .is_err()
     {
-        let _ = sender.try_send(ControllerCommand::NativeWindowEvent);
+        WINDOW_EVENT_PENDING.store(false, Ordering::Release);
     }
 }
 

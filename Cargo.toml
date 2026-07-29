@@ -1,6 +1,6 @@
 [package]
 name = "clubgg-table-arranger"
-version = "0.4.6"
+version = "0.4.7"
 edition = "2024"
 rust-version = "1.97.1"
 description = "A focus-safe Windows workspace arranger for ClubGG tables and application windows"
@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 crossbeam-channel = "0.5.16"
 directories = "6.0.0"
-eframe = { version = "0.35.0", default-features = false, features = ["accesskit", "default_fonts", "persistence", "wgpu"] }
+eframe = { version = "0.35.0", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence"] }
 global-hotkey = { version = "0.8.0", features = ["tracing"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
