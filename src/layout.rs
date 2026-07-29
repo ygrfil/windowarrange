@@ -74,8 +74,7 @@ pub fn calculate_layout(work_area: Rect, count: usize, aspect_ratio: f64) -> Lay
 
     let rectangles = (0..count)
         .map(|index| {
-            let column = index % columns;
-            let row = index / columns;
+            let (column, row) = grid_position(index, count, columns, rows);
             Rect::new(
                 work_area.left
                     + i32::try_from(column)
@@ -98,6 +97,26 @@ pub fn calculate_layout(work_area: Rect, count: usize, aspect_ratio: f64) -> Lay
         table_height,
         rectangles,
     }
+}
+
+fn grid_position(index: usize, count: usize, columns: usize, rows: usize) -> (usize, usize) {
+    if count <= 4 || columns < 2 || rows < 2 {
+        return (index % columns, index / columns);
+    }
+
+    const FIRST_FOUR: [(usize, usize); 4] = [(0, 0), (1, 0), (0, 1), (1, 1)];
+    if index < FIRST_FOUR.len() {
+        return FIRST_FOUR[index];
+    }
+
+    let remaining = index - FIRST_FOUR.len();
+    let right_side_slots = columns.saturating_sub(2) * rows;
+    if remaining < right_side_slots {
+        return (2 + remaining / rows, remaining % rows);
+    }
+
+    let below_first_grid = remaining - right_side_slots;
+    (below_first_grid % 2, 2 + below_first_grid / 2)
 }
 
 #[must_use]
@@ -149,6 +168,36 @@ mod tests {
         assert!(layout.rectangles.iter().all(|rect| {
             rect.width == layout.table_width && rect.height == layout.table_height
         }));
+    }
+
+    #[test]
+    fn tables_above_four_extend_the_two_by_two_grid_in_vertical_pairs() {
+        let work_area = Rect::new(0, 0, 2752, 1104);
+        let expected = [
+            (0, 0),
+            (1, 0),
+            (0, 1),
+            (1, 1),
+            (2, 0),
+            (2, 1),
+            (3, 0),
+            (3, 1),
+        ];
+
+        for count in 5..=8 {
+            let layout = calculate_layout(work_area, count, 4.0 / 3.0);
+            let positions: Vec<_> = layout
+                .rectangles
+                .iter()
+                .map(|rect| {
+                    (
+                        usize::try_from((rect.left - work_area.left) / layout.table_width).unwrap(),
+                        usize::try_from((rect.top - work_area.top) / layout.table_height).unwrap(),
+                    )
+                })
+                .collect();
+            assert_eq!(positions, expected[..count]);
+        }
     }
 
     #[test]

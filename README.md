@@ -9,10 +9,10 @@ A Windows-only companion that arranges independently movable ClubGG poker tables
 3. Review every discovered normal application window in the single compact list.
 4. For ClubGG windows, choose **Arrange** to include a table in the equal-size grid, **Park** to shrink it at the bottom-right, or **Ignore** to leave it untouched.
 5. Other application windows default to **Ignore**. Choose **Top-right** to preserve their size at the display corner, or **Fill space** to resize them into the vertical strip to the right of active poker tables.
-6. Drag a managed poker tile onto another to change table order, use **◎** to locate a window, or **Arrange** for an immediate reflow.
+6. Click one managed poker table number, then another, to swap their positions. Click the selected number again to cancel, use **◎** to locate a window, or **Arrange** for an immediate reflow.
 7. Minimize the panel to the system tray when desired.
 
-The compact horizontal panel has a left control rail, draggable poker-table tiles, and a separate ordinary-window area. Drag one managed poker tile onto another to swap their display positions immediately. The new table order is remembered.
+The compact horizontal panel has a left control rail, click-selectable poker-table tiles, and a separate ordinary-window area. Click one managed poker table number and then another to swap their display positions immediately. The new table order is remembered.
 
 The panel is intentionally small and cannot be maximized. Active poker tables and inactive ClubGG windows are separated into compact groups, while dense two-column grids keep the complete workspace visible without scrolling.
 
@@ -23,6 +23,8 @@ All window choices are remembered across restarts. Ordinary-window rules use bot
 **Fill space** never changes the poker layout and never places an application below poker tables. It uses the selected monitor's full-height strip from the rightmost active poker edge to the display's right edge. If several application windows use Fill space, they share the same rectangle and can be switched normally.
 
 One to three active tables use the same maximum table size as the four-table layout. On a 2×2 display layout, two tables occupy the top row and three add the bottom-left position. Four or more tables retain optimized equal-size layouts.
+
+When more than four tables are active, slots 1–4 keep the original 2×2 positions. Additional tables extend to the right in vertical pairs: table 5 above 6, then table 7 above 8.
 
 Default shortcuts:
 
@@ -49,7 +51,7 @@ The repository pins Rust 1.97.1 and the exact dependency graph in `Cargo.lock`.
 cargo build --release --locked
 ```
 
-The portable executable is produced at `target\release\table-arranger-control.exe`.
+Cargo produces the intermediate executable at `target\release\table-arranger-control.exe`. Verified releases are published under `dist\` as both `Table-Arranger-Control.exe` and a matching versioned archive.
 
 ## Development
 

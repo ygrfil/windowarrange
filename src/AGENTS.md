@@ -36,11 +36,11 @@
 - ClubGG tiles expose **Active**, **Park**, and **Ignore**. Ordinary application cards expose **Ignore**, **Fill space**, and **Top-right**.
 - Configuration schema version 4 persists table, parked, ignored, top-right, and free-space dispositions plus table order. Ordinary-window choices write an exact signature and a process/class fallback; exact matches take priority.
 - A Refresh command reconciles immediately and arranges regardless of Auto state. Turning Auto on reconciles and arranges immediately. Native location events retain debounce and manual-movement protections.
-- Use native window events as the primary discovery trigger with a ten-second fallback reconciliation. Coalesce duplicate native events until reconciliation begins.
+- Use native window events as the primary discovery trigger with a 200-millisecond trailing debounce and a ten-second fallback reconciliation. Explicit Refresh and enabling Auto remain immediate.
 - Use bounded background channels. The controller snapshot channel retains only the newest state, suppresses unchanged snapshots, and explicitly wakes egui when a new state is published; do not add a periodic UI repaint loop.
 - Use eframe's Glow renderer for the compact panel unless measurements and compatibility testing justify a different backend.
-- Poker drag-and-drop emits the same typed `Reorder` command as other reorder controls. The controller persists reordered signatures and immediately arranges; UI code never moves windows directly.
-- `layout.rs` evaluates a virtual count of four for 1–3 active tables and returns only the requested first row-major rectangles. Counts 4+ retain maximal-area grid selection.
+- Poker table-number clicks use a two-step selection: the first click selects, a second click on the same number cancels, and a click on another managed table number emits the typed `Reorder` command. The controller persists reordered signatures and immediately arranges; UI code never moves windows directly.
+- `layout.rs` evaluates a virtual count of four for 1–3 active tables and returns only the requested first row-major rectangles. Counts 4+ retain maximal-area grid selection. For counts above four, preserve the initial 2×2 slot order `(1,2)/(3,4)`, then extend right in vertical pairs `5/6` and `7/8`; non-two-row grids preserve the same initial 2×2 block before filling remaining cells deterministically.
 - `layout.rs::right_side_free_rect` returns the full-height monitor strip starting at the rightmost active poker-table edge. Fill-space application windows may overlap one another, must never use empty space below poker tables, and do not treat parked-table bounds as occupied.
 - Do not manipulate internal ClubGG child controls; only independently movable top-level or owned-popup windows are eligible.
 - General discovery includes visible, non-cloaked, titled, non-tool top-level application windows and excludes the current process and Windows desktop/taskbar surfaces. Ordinary windows default to ignored.
@@ -52,7 +52,7 @@
 - Treat destroyed handles and access denial as recoverable per-window conditions.
 - Suppress self-generated location events so arranging does not create an event loop.
 - Keep the UI usable when no ClubGG process or table is present.
-- Use bundled-font-safe text for always-visible rail and drag controls; tooltips may clarify compact labels.
+- Use bundled-font-safe text for always-visible rail and table-selection controls; tooltips may clarify compact labels.
 - Preserve current size for Top-right placement unless it exceeds the selected working area. Refuse Fill-space movement when the remaining rectangle is smaller than the target window's minimum size.
 
 # Verification

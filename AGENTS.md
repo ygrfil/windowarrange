@@ -70,7 +70,7 @@ Default section order:
 - Prefer safe Rust. Confine Win32 `unsafe` operations to the native backend and expose safe typed interfaces.
 - Manage only user-approved window geometry. Never automate poker actions, read cards, click controls, or alter application internals.
 - Preserve table focus and Z-order while arranging. Never surprise-move real ClubGG windows from automated tests.
-- Preserve the table aspect ratio, use equal outer dimensions, and anchor layouts at the selected monitor's top-left working area. For 1–3 active tables, reuse the four-table grid size and first row-major slots; for 4+ tables, maximize equal per-table area.
+- Preserve the table aspect ratio, use equal outer dimensions, and anchor layouts at the selected monitor's top-left working area. For 1–3 active tables, reuse the four-table grid size and first row-major slots; for 4+ tables, maximize equal per-table area. Above four tables, preserve slots 1–4 as the original 2×2 block and add slots 5–8 in top/bottom vertical pairs extending right.
 - Support stable ordering, automatic reflow, enabled/parked tables, configurable hotkeys, a floating panel, and tray operation.
 - Discover normal visible top-level application windows while excluding the arranger, desktop/taskbar shell surfaces, cloaked windows, child windows, disabled windows, and non-ClubGG tool windows.
 - Show selected poker and application windows first, then parked poker tables, then ignored windows, with stable session order inside each group. Screen movement must never reorder rows within a group, and signature-based choices must survive restarts.
@@ -78,13 +78,13 @@ Default section order:
 - **Top-right** preserves an ordinary window's current size and anchors it to the selected display's top-right. **Fill space** resizes it only into the full-height vertical strip between the rightmost active poker-table edge and the selected display's right edge; it must never use space below poker tables. Multiple selected ordinary windows share that strip.
 - Persist ordinary-window choices with an exact title-aware rule plus a process/class fallback so choices survive title changes and restarts. Exact rules allow different currently identified windows from one application to retain different choices.
 - Refresh must reconcile discovery and immediately reapply all selected poker and ordinary-window placement. Enabling Auto must also immediately apply the complete workspace.
-- Present a compact horizontal workspace board: a narrow Auto/Arrange/Refresh/Settings rail, draggable poker-table tiles, a separate ordinary-window area, display selection, status, Locate, and tray access.
+- Present a compact horizontal workspace board: a narrow Auto/Arrange/Refresh/Settings rail, click-selectable poker-table tiles, a separate ordinary-window area, display selection, status, Locate, and tray access.
 - Keep the panel responsive within a compact 680×350 minimum and 820×460 maximum, disable maximizing, fill the full viewport background, and show the complete main workspace without scroll areas. Use dense two-column grids and constrain every tile to its pane.
 - Keep the compact controller resource-efficient: use the eframe Glow renderer, wake the UI from actual state and input events, and bound/coalesce background event delivery.
-- Dragging one managed poker tile onto another changes the controller's table order, immediately swaps display slots, and persists the new order.
+- Clicking one managed poker table number selects it; clicking another table number changes the controller's table order, immediately swaps display slots, and persists the new order. Clicking the selected number again cancels selection.
 - Target ClubGG first and keep discovery profiles extensible for future GGPoker support.
 - Keep the executable, PE metadata, app ID, top-level panel title, and tray identity neutral: use **Table Arranger Control** rather than `ClubGG`. Third-party hand converters may otherwise mistake the arranger for the poker client and inject incompatible ClubGG hooks.
-- Deliver a manually launched, portable `x86_64-pc-windows-msvc` executable named `Table-Arranger-Control.exe` without an installer or startup registration.
+- Deliver manually launched, portable `x86_64-pc-windows-msvc` release executables under `dist/` without an installer or startup registration. Keep `Table-Arranger-Control.exe` as the current release and a matching `Table-Arranger-Control-<version>.exe` archive.
 
 ## Dependency Policy
 
@@ -99,6 +99,7 @@ Default section order:
 ## Repository Workflow
 
 - Keep application code under `src/`, integration and property tests under `tests/`, and Windows resources under `assets/`.
+- Publish release artifacts only under `dist/`. Before publishing, replace the stale current executable, then copy the verified build as both the current neutral filename and the versioned archive. Preserve older versioned archives unless the user explicitly approves their deletion.
 - Keep full ClubGG window titles out of ordinary logs and persisted diagnostics.
 - Ship the release executable with a `requireAdministrator` manifest because ClubGG table movement on the target system requires matching elevated privileges. Windows must display the standard UAC prompt at launch.
 - Keep debug and test artifacts `asInvoker` so automated verification can execute without elevation; this exception does not apply to delivered release binaries.
@@ -136,16 +137,19 @@ Before delivery, run:
 - Do not immediately undo manual moves; wait until the next structural reflow or explicit arrange action.
 - Leave disabled tables parked when the arranger exits.
 - Launch manually and deliver a portable executable only.
+- Keep every delivered release in `dist/`, replacing the stale current executable before publishing while retaining versioned archives by default.
 - Preserve the neutral Table Arranger Control shell identity for compatibility with Asian Hand Converter and similar software.
 - Launch release builds as administrator through the embedded manifest.
 - Keep the panel compact and modern: a narrow command rail, spatial poker-table tiles, a separate ordinary-window area, fixed contextual controls, and secondary settings in a popup.
 - Keep the workspace visually structured and space-efficient: align the first poker and ordinary-window cards with the Auto button, omit section descriptions, and separate active poker tables from parked and ignored poker windows with spacing and a divider.
 - Cap layouts below four active tables at the four-table cell size: two occupy the top row and three add the bottom-left slot.
+- Above four active tables, retain 1–2 across the first top row and 3–4 below them; place 5 above 6 in the next column and 7 above 8 in the following column.
 - Discover ordinary open application windows but never move them by default. Provide persistent Ignore, Top-right, and Fill-space choices without adding ordinary windows to the poker grid.
 - Keep Fill-space application windows strictly to the right of active poker tables for every table count, including one or two; never choose a larger empty band underneath the tables.
-- Remember ordinary-window behavior across restarts even when its title changes, and remember table order after mouse drag-and-drop.
+- Remember ordinary-window behavior across restarts even when its title changes, and remember table order after click-to-swap reordering.
 - Keep every primary rail action visible without overlap and avoid decorative glyphs that are missing from the bundled font.
 - Keep idle RAM, GPU-memory, and CPU use proportionate to a compact control utility without weakening window-event responsiveness.
+- Debounce native window-event discovery by 200 milliseconds while keeping explicit Refresh, Arrange, Auto, and hotkey actions immediate.
 
 ## Child DOX Index
 

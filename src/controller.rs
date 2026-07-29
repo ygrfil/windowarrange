@@ -21,6 +21,7 @@ use crate::{
 };
 
 const FALLBACK_RECONCILE_INTERVAL: Duration = Duration::from_secs(10);
+const DISCOVERY_DEBOUNCE: Duration = Duration::from_millis(200);
 const REFLOW_DEBOUNCE: Duration = Duration::from_millis(500);
 const COMMAND_QUEUE_CAPACITY: usize = 64;
 const SNAPSHOT_QUEUE_CAPACITY: usize = 1;
@@ -102,7 +103,7 @@ struct Controller {
     monitors: Vec<MonitorInfo>,
     dirty_since: Option<Instant>,
     last_reconcile: Instant,
-    native_event_pending: Option<&'static AtomicBool>,
+    discovery_due: Option<Instant>,
     status_message: String,
 }
 
@@ -129,7 +130,7 @@ impl Controller {
             monitors: Vec::new(),
             dirty_since: None,
             last_reconcile: Instant::now() - FALLBACK_RECONCILE_INTERVAL,
-            native_event_pending: None,
+            discovery_due: None,
             status_message: "Looking for ClubGG tables…".to_owned(),
         }
     }
@@ -146,17 +147,16 @@ impl Controller {
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             }
 
-            while let Ok(command) = commands.try_recv() {
+            for command in commands.try_iter().take(COMMAND_QUEUE_CAPACITY) {
                 if matches!(command, ControllerCommand::Shutdown) {
                     return;
                 }
                 self.handle(command);
             }
 
-            if self.last_reconcile.elapsed() >= FALLBACK_RECONCILE_INTERVAL {
-                if let Some(pending) = self.native_event_pending.take() {
-                    pending.store(false, Ordering::Release);
-                }
+            let discovery_due = self.discovery_due.is_some_and(|due| Instant::now() >= due);
+            if discovery_due || self.last_reconcile.elapsed() >= FALLBACK_RECONCILE_INTERVAL {
+                self.discovery_due = None;
                 self.reconcile();
             }
 
@@ -171,28 +171,33 @@ impl Controller {
     }
 
     fn next_wait(&self) -> Duration {
-        let until_reconcile =
-            FALLBACK_RECONCILE_INTERVAL.saturating_sub(self.last_reconcile.elapsed());
-        self.dirty_since.map_or(until_reconcile, |dirty| {
-            until_reconcile.min(REFLOW_DEBOUNCE.saturating_sub(dirty.elapsed()))
-        })
+        let mut wait = FALLBACK_RECONCILE_INTERVAL.saturating_sub(self.last_reconcile.elapsed());
+        if let Some(due) = self.discovery_due {
+            wait = wait.min(due.saturating_duration_since(Instant::now()));
+        }
+        if let Some(dirty) = self.dirty_since {
+            wait = wait.min(REFLOW_DEBOUNCE.saturating_sub(dirty.elapsed()));
+        }
+        wait
     }
 
     fn handle(&mut self, command: ControllerCommand) {
         match command {
             ControllerCommand::ForceArrange => self.arrange(),
             ControllerCommand::Refresh => {
+                self.discovery_due = None;
                 self.reconcile();
                 self.arrange();
             }
             ControllerCommand::NativeWindowEvent(pending) => {
-                self.native_event_pending = Some(pending);
-                self.last_reconcile = Instant::now() - FALLBACK_RECONCILE_INTERVAL;
+                pending.store(false, Ordering::Release);
+                self.discovery_due = Some(Instant::now() + DISCOVERY_DEBOUNCE);
             }
             ControllerCommand::SetAutoArrange(enabled) => {
                 self.config.auto_arrange = enabled;
                 self.save_config();
                 if enabled {
+                    self.discovery_due = None;
                     self.reconcile();
                     self.arrange();
                 } else {
@@ -565,17 +570,18 @@ impl Controller {
                 .any(|size| *size != (common_width, common_height))
         {
             for (slot, index) in enabled_indices.iter().copied().enumerate() {
-                let column = slot % layout.columns;
-                let row = slot / layout.columns;
+                let requested = layout.rectangles[slot];
+                let column = requested
+                    .left
+                    .saturating_sub(monitor.work_area.left)
+                    .div_euclid(layout.table_width);
+                let row = requested
+                    .top
+                    .saturating_sub(monitor.work_area.top)
+                    .div_euclid(layout.table_height);
                 let rect = Rect::new(
-                    monitor.work_area.left
-                        + i32::try_from(column)
-                            .unwrap_or(i32::MAX)
-                            .saturating_mul(common_width),
-                    monitor.work_area.top
-                        + i32::try_from(row)
-                            .unwrap_or(i32::MAX)
-                            .saturating_mul(common_height),
+                    monitor.work_area.left + column.saturating_mul(common_width),
+                    monitor.work_area.top + row.saturating_mul(common_height),
                     common_width,
                     common_height,
                 );

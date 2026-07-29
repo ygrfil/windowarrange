@@ -10,7 +10,7 @@ use crate::{
     hotkeys::{HotkeyAction, HotkeyService},
     identity::{APP_ID, PANEL_TITLE},
     logging,
-    model::{CandidateView, TableStatus, UiSnapshot, WindowMode},
+    model::{CandidateView, ManagedTable, TableStatus, UiSnapshot, WindowId, WindowMode},
     tray::{TrayAction, TrayService, egui_icon},
     win32::{
         Win32Backend, acquire_single_instance, activate_existing_panel, apply_process_mitigations,
@@ -120,7 +120,7 @@ struct TableArrangerApp {
     shortcut_draft: HotkeySettings,
     shortcut_errors: Vec<String>,
     settings_open: bool,
-    dragged_table: Option<crate::model::WindowId>,
+    selected_table: Option<crate::model::WindowId>,
     exiting: bool,
 }
 
@@ -158,7 +158,7 @@ impl TableArrangerApp {
             shortcut_draft: hotkey_settings,
             shortcut_errors,
             settings_open: false,
-            dragged_table: None,
+            selected_table: None,
             exiting: false,
         }
     }
@@ -435,8 +435,12 @@ impl TableArrangerApp {
         }
         self.poker_group(ui, &inactive, tile_width, tile_height);
 
-        if ui.input(|input| input.pointer.any_released()) {
-            self.dragged_table = None;
+        if self.selected_table.is_some_and(|selected| {
+            !windows
+                .iter()
+                .any(|window| window.id == selected && window.slot.is_some())
+        }) {
+            self.selected_table = None;
         }
     }
 
@@ -470,21 +474,21 @@ impl TableArrangerApp {
     }
 
     fn poker_tile(&mut self, ui: &mut egui::Ui, window: &CandidateView) {
-        let is_dragging = self.dragged_table == Some(window.id);
-        let card_fill = if is_dragging {
+        let is_selected = self.selected_table == Some(window.id);
+        let card_fill = if is_selected {
             ACCENT.gamma_multiply(0.22)
         } else if ui.visuals().dark_mode {
             egui::Color32::from_gray(27)
         } else {
             egui::Color32::from_gray(248)
         };
-        let card_stroke = if is_dragging {
+        let card_stroke = if is_selected {
             egui::Stroke::new(2.0, ACCENT)
         } else {
             egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)
         };
-        let mut drag_started = false;
-        let response = egui::Frame::new()
+        let mut slot_clicked = false;
+        egui::Frame::new()
             .fill(card_fill)
             .stroke(card_stroke)
             .corner_radius(6)
@@ -492,15 +496,7 @@ impl TableArrangerApp {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.horizontal(|ui| {
-                    let drag = ui
-                        .add_enabled(
-                            window.slot.is_some(),
-                            egui::Label::new("::").sense(egui::Sense::drag()),
-                        )
-                        .on_hover_cursor(egui::CursorIcon::Grab)
-                        .on_hover_text("Drag onto another table to swap positions");
-                    drag_started = drag.drag_started();
-                    compact_slot_badge(ui, window);
+                    slot_clicked = compact_slot_badge(ui, window, is_selected).clicked();
                     let title_width = (ui.available_width() - 26.0).max(24.0);
                     ui.add_sized(
                         [title_width, 16.0],
@@ -523,28 +519,11 @@ impl TableArrangerApp {
             .response
             .on_hover_text(window_subtitle(window));
 
-        if drag_started {
-            self.dragged_table = Some(window.id);
-        }
-        if let Some(dragged) = self.dragged_table
-            && dragged != window.id
-            && response.hovered()
-            && ui.input(|input| input.pointer.any_released())
+        if slot_clicked
+            && let Some(command) =
+                table_slot_click(&mut self.selected_table, window.id, &self.snapshot.tables)
         {
-            let from = self
-                .snapshot
-                .tables
-                .iter()
-                .position(|table| table.id == dragged);
-            let to = self
-                .snapshot
-                .tables
-                .iter()
-                .position(|table| table.id == window.id);
-            if let (Some(from), Some(to)) = (from, to) {
-                self.send(ControllerCommand::Reorder { from, to });
-            }
-            self.dragged_table = None;
+            self.send(command);
         }
     }
 
@@ -626,7 +605,7 @@ impl TableArrangerApp {
             .inner_margin(egui::Margin::same(4))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    compact_slot_badge(ui, window);
+                    compact_slot_badge(ui, window, false);
                     let text_width = (ui.available_width() - 24.0).max(24.0);
                     ui.allocate_ui_with_layout(
                         egui::vec2(text_width, 28.0),
@@ -856,7 +835,29 @@ impl eframe::App for TableArrangerApp {
     }
 }
 
-fn compact_slot_badge(ui: &mut egui::Ui, window: &CandidateView) {
+fn table_slot_click(
+    selected: &mut Option<WindowId>,
+    clicked: WindowId,
+    tables: &[ManagedTable],
+) -> Option<ControllerCommand> {
+    match selected.take() {
+        None => {
+            *selected = Some(clicked);
+            None
+        }
+        Some(previous) if previous == clicked => None,
+        Some(previous) => {
+            let from = tables.iter().position(|table| table.id == previous);
+            let to = tables.iter().position(|table| table.id == clicked);
+            match (from, to) {
+                (Some(from), Some(to)) => Some(ControllerCommand::Reorder { from, to }),
+                _ => None,
+            }
+        }
+    }
+}
+
+fn compact_slot_badge(ui: &mut egui::Ui, window: &CandidateView, selected: bool) -> egui::Response {
     let color = match window.mode {
         WindowMode::Arranged => ACCENT,
         WindowMode::Parked => PARKED,
@@ -871,8 +872,21 @@ fn compact_slot_badge(ui: &mut egui::Ui, window: &CandidateView) {
             .slot
             .map_or_else(|| "—".to_owned(), |slot| slot.to_string()),
     };
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+    let sense = if window.slot.is_some() {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), sense);
     ui.painter().rect_filled(rect, 4.0, color);
+    if selected {
+        ui.painter().rect_stroke(
+            rect,
+            4.0,
+            egui::Stroke::new(2.0, egui::Color32::WHITE),
+            egui::StrokeKind::Inside,
+        );
+    }
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -884,6 +898,17 @@ fn compact_slot_badge(ui: &mut egui::Ui, window: &CandidateView) {
             egui::Color32::WHITE
         },
     );
+    if window.slot.is_some() {
+        response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(if selected {
+                "Selected — click again to cancel"
+            } else {
+                "Select this table, then click another table number to swap"
+            })
+    } else {
+        response
+    }
 }
 
 fn empty_section(ui: &mut egui::Ui, title: &str, detail: &str) {
@@ -1025,11 +1050,14 @@ mod tests {
     use crossbeam_channel::unbounded;
     use eframe::egui;
 
-    use super::{TableArrangerApp, window_mode_rank};
+    use super::{TableArrangerApp, table_slot_click, window_mode_rank};
     use crate::{
         config::HotkeySettings,
         controller::ControllerCommand,
-        model::{CandidateView, UiSnapshot, WindowId, WindowMode},
+        model::{
+            CandidateView, ManagedTable, Rect, TableStatus, UiSnapshot, WindowId, WindowMode,
+            WindowSignature,
+        },
         tray::TrayAction,
     };
 
@@ -1042,6 +1070,39 @@ mod tests {
         );
         assert!(window_mode_rank(WindowMode::FreeSpace) < window_mode_rank(WindowMode::Parked));
         assert!(window_mode_rank(WindowMode::Parked) < window_mode_rank(WindowMode::Ignored));
+    }
+
+    #[test]
+    fn table_number_click_selects_cancels_and_swaps() {
+        let tables = [1, 2]
+            .map(|id| ManagedTable {
+                id: WindowId(id),
+                label: format!("Table {id}"),
+                signature: WindowSignature {
+                    process_name: "poker.exe".to_owned(),
+                    class_name: "Table".to_owned(),
+                    title_pattern: id.to_string(),
+                },
+                enabled: true,
+                last_active_rect: Rect::default(),
+                status: TableStatus::Ready,
+            })
+            .to_vec();
+        let mut selected = None;
+
+        assert!(table_slot_click(&mut selected, WindowId(1), &tables).is_none());
+        assert_eq!(selected, Some(WindowId(1)));
+
+        assert!(table_slot_click(&mut selected, WindowId(1), &tables).is_none());
+        assert_eq!(selected, None);
+
+        assert!(table_slot_click(&mut selected, WindowId(1), &tables).is_none());
+        let command = table_slot_click(&mut selected, WindowId(2), &tables);
+        assert_eq!(selected, None);
+        assert!(matches!(
+            command,
+            Some(ControllerCommand::Reorder { from: 0, to: 1 })
+        ));
     }
 
     #[test]
@@ -1087,7 +1148,7 @@ mod tests {
             shortcut_draft: HotkeySettings::default(),
             shortcut_errors: Vec::new(),
             settings_open: false,
-            dragged_table: None,
+            selected_table: None,
             exiting: false,
         };
 
@@ -1188,7 +1249,7 @@ mod tests {
             shortcut_draft: HotkeySettings::default(),
             shortcut_errors: Vec::new(),
             settings_open: false,
-            dragged_table: None,
+            selected_table: None,
             exiting: false,
         };
 

@@ -22,7 +22,9 @@
 - The automated UI regression must render eight long-title poker candidates split across active and inactive groups plus eight ordinary candidates in a compact viewport and assert that the tile, poker board, application board, and combined workspace remain within width and height bounds.
 - The UI regression must independently bound the top-bar height so header layout changes cannot displace the command rail and workspace outside the visible client area.
 - The UI regression must assert that the command rail and workspace allocations share the same top coordinate; section descriptions must not reintroduce vertical offsets before the first cards.
+- UI tests and the manual checklist must cover poker table-number selection, same-number cancellation, and second-number swap dispatch.
 - Geometry tests must verify right-side-strip containment, full work-area height, non-overlap with active poker tables, and specifically that one or two tables never cause Fill space to select a bottom band.
+- Geometry tests must verify that layouts above four tables preserve slots 1–4 as `(1,2)/(3,4)` and extend right with vertical pairs `5/6` and `7/8`.
 - Unit tests must keep the outer shell identity free of `ClubGG` so third-party poker hooks do not target the arranger.
 
 # Work Guidance
