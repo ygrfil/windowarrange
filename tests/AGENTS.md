@@ -17,13 +17,15 @@
 - Tests must not depend on monitor resolution, locale, or table titles.
 - Controller tests must verify that denied or failed moves are reported as failures rather than successful arrangements.
 - Controller tests must verify stable discovered-window order, contextual poker/application modes, ordinary-window default Ignore behavior, and persistence of all states.
-- Controller tests must verify process/class fallback across an ordinary window title change, immediate ordinary-window placement on Refresh and Auto enable, and table-order restoration after restart.
-- Manual UI checks must cover minimum/default/maximum panel sizes, full background painting, visible rail actions, bounded poker/application panes, 1–8 tables plus ordinary-window choices visible without scrolling, and bundled-font glyph rendering.
+- Controller tests must verify process/class fallback across an ordinary window title change, immediate ordinary-window placement on Arrange and Auto enable, configurable default behavior with explicit-rule precedence, and table-order restoration after restart.
+- Manual UI checks must cover automatic panel-height fitting, full background painting, visible toolbar actions, bounded poker/application panes, 1–8 tables plus ordinary-window choices visible without scrolling, and bundled-font glyph rendering.
 - The automated UI regression must render eight long-title poker candidates split across active and inactive groups plus eight ordinary candidates in a compact viewport and assert that the tile, poker board, application board, and combined workspace remain within width and height bounds.
-- The UI regression must independently bound the top-bar height so header layout changes cannot displace the command rail and workspace outside the visible client area.
-- The UI regression must assert that the command rail and workspace allocations share the same top coordinate; section descriptions must not reintroduce vertical offsets before the first cards.
+- The UI regression must independently bound the top-toolbar height so it cannot displace the workspace outside the visible client area.
+- The UI regression must assert deterministic fitted heights for empty and populated snapshots, including two active plus three inactive poker tables and three ordinary windows; the final inactive row must not clip, and section descriptions or summary headers must not reintroduce unused vertical space before the first cards.
 - UI tests and the manual checklist must cover poker table-number selection, same-number cancellation, and second-number swap dispatch.
 - Geometry tests must verify right-side-strip containment, full work-area height, non-overlap with active poker tables, and specifically that one or two tables never cause Fill space to select a bottom band.
+- Controller tests must verify that two-slot reservation defaults on for both zero and one active table, uses the same right boundary as a real two-table layout, toggles immediately while Auto is off, and persists across restart.
+- Controller tests must verify that parked tables use queried minimum sizes and line up from bottom-right toward the left without overlap.
 - Geometry tests must verify that layouts above four tables preserve slots 1–4 as `(1,2)/(3,4)` and extend right with vertical pairs `5/6` and `7/8`.
 - Unit tests must keep the outer shell identity free of `ClubGG` so third-party poker hooks do not target the arranger.
 - Unit tests must verify the shared icon retains its blue field, spade silhouette, and centered white plus.

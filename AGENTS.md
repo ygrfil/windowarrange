@@ -66,7 +66,7 @@ Default section order:
 
 ## Project Contract
 
-- Build a Windows-only Rust 2024 desktop application named **Table Arranger Control**.
+- Build a Windows-only Rust 2024 desktop application named **Table Arranger Control**. Do not provide, retain, or package macOS or Linux runtime support; application dependencies must be Windows-targeted.
 - Prefer safe Rust. Confine Win32 `unsafe` operations to the native backend and expose safe typed interfaces.
 - Manage only user-approved window geometry. Never automate poker actions, read cards, click controls, or alter application internals.
 - Preserve table focus and Z-order while arranging. Never surprise-move real ClubGG windows from automated tests.
@@ -74,12 +74,14 @@ Default section order:
 - Support stable ordering, automatic reflow, enabled/parked tables, configurable hotkeys, a floating panel, and tray operation.
 - Discover normal visible top-level application windows while excluding the arranger, desktop/taskbar shell surfaces, cloaked windows, child windows, disabled windows, and non-ClubGG tool windows.
 - Show selected poker and application windows first, then parked poker tables, then ignored windows, with stable session order inside each group. Screen movement must never reorder rows within a group, and signature-based choices must survive restarts.
-- Default likely ClubGG poker tables to **Arrange**. Default every ordinary application window to **Ignore** until the user explicitly chooses **Top-right** or **Fill space**.
+- Default likely ClubGG poker tables to **Arrange**. The configurable ordinary-window default starts at **Ignore** and may be changed in Settings to **Top-right** or **Fill space**; an explicit saved window rule always overrides the default.
 - **Top-right** preserves an ordinary window's current size and anchors it to the selected display's top-right. **Fill space** resizes it only into the full-height vertical strip between the rightmost active poker-table edge and the selected display's right edge; it must never use space below poker tables. Multiple selected ordinary windows share that strip.
+- Provide a persistent **2 Slots** switch in Settings, enabled by default. When enabled and fewer than two poker tables are active, calculate the Fill-space boundary as if two table slots were occupied; never create or move placeholder windows. Toggling it must reapply placement immediately even when Auto is off.
 - Persist ordinary-window choices with an exact title-aware rule plus a process/class fallback so choices survive title changes and restarts. Exact rules allow different currently identified windows from one application to retain different choices.
-- Refresh must reconcile discovery and immediately reapply all selected poker and ordinary-window placement. Enabling Auto must also immediately apply the complete workspace.
-- Present a compact horizontal workspace board: a narrow Auto/Arrange/Refresh/Settings rail, click-selectable poker-table tiles, a separate ordinary-window area, display selection, status, Locate, and tray access.
-- Keep the panel responsive within a compact 680×350 minimum and 820×460 maximum, disable maximizing, fill the full viewport background, and show the complete main workspace without scroll areas. Use dense two-column grids and constrain every tile to its pane.
+- The single **Arrange** action must reconcile discovery and immediately reapply all selected poker and ordinary-window placement. Enabling Auto must also immediately apply the complete workspace.
+- Park disabled poker tables at their actual minimum supported sizes, starting at the selected display's bottom-right and continuing directly left without overlap; wrap upward only when a row cannot fit.
+- Present a compact workspace board: a single top toolbar with Auto, Arrange, Settings, and tray hiding; click-selectable poker-table tiles; a separate ordinary-window area; and per-window Locate/mode controls. Put display selection, 2 Slots, default ordinary-window behavior, counts/status, and hotkey details in Settings.
+- Keep the panel responsive within 680–820 points wide and automatically fit its height between 180 and 420 points to the visible cards. Disable maximizing, fill the full viewport background, and show the complete main workspace without scroll areas. Use dense two-column grids and constrain every tile to its pane.
 - Keep the compact controller resource-efficient: use the eframe Glow renderer, wake the UI from actual state and input events, and bound/coalesce background event delivery.
 - Clicking one managed poker table number selects it; clicking another table number changes the controller's table order, immediately swaps display slots, and persists the new order. Clicking the selected number again cancels selection.
 - Target ClubGG first and keep discovery profiles extensible for future GGPoker support.
@@ -130,6 +132,7 @@ Before delivery, run:
 ## User Preferences
 
 - Use Rust where it is suitable; it is the selected implementation language.
+- Keep the application strictly Windows-only; do not spend dependencies or implementation effort on macOS or Linux support.
 - Use automatic arrangement plus manual hotkeys.
 - Keep table order stable while compacting after close or disable operations.
 - Preserve the ClubGG table shape.
@@ -142,16 +145,18 @@ Before delivery, run:
 - Preserve the neutral Table Arranger Control shell identity for compatibility with Asian Hand Converter and similar software.
 - Keep the executable, window, and tray icon blue with a spade silhouette and a centered white plus.
 - Launch release builds as administrator through the embedded manifest.
-- Keep the panel compact and modern: a narrow command rail, spatial poker-table tiles, a separate ordinary-window area, fixed contextual controls, and secondary settings in a popup.
-- Keep the workspace visually structured and space-efficient: align the first poker and ordinary-window cards with the Auto button, omit section descriptions, and separate active poker tables from parked and ignored poker windows with spacing and a divider.
+- Keep the panel compact and modern: a short horizontal toolbar, spatial poker-table tiles, a separate ordinary-window area, fixed contextual controls, and all secondary controls/status in Settings.
+- Keep the workspace visually structured and space-efficient: start poker and ordinary-window cards directly below the toolbar, omit section descriptions, separate active poker tables from parked and ignored poker windows with spacing and a divider, and automatically shrink panel height when fewer rows are visible without clipping the final row.
 - Cap layouts below four active tables at the four-table cell size: two occupy the top row and three add the bottom-left slot.
 - Above four active tables, retain 1–2 across the first top row and 3–4 below them; place 5 above 6 in the next column and 7 above 8 in the following column.
-- Discover ordinary open application windows but never move them by default. Provide persistent Ignore, Top-right, and Fill-space choices without adding ordinary windows to the poker grid.
+- Discover ordinary open application windows and default them to Ignore. Let the user change the global default to Ignore, Top-right, or Fill-space in Settings, while persistent per-window choices override it and ordinary windows never join the poker grid.
 - Keep Fill-space application windows strictly to the right of active poker tables for every table count, including one or two; never choose a larger empty band underneath the tables.
+- Reserve the poker width of two slots for Fill-space applications by default even when zero or one table is open; remember the user's 2 Slots switch choice across restarts.
 - Remember ordinary-window behavior across restarts even when its title changes, and remember table order after click-to-swap reordering.
-- Keep every primary rail action visible without overlap and avoid decorative glyphs that are missing from the bundled font.
+- Keep every primary toolbar action visible without overlap and avoid decorative glyphs that are missing from the bundled font.
 - Keep idle RAM, GPU-memory, and CPU use proportionate to a compact control utility without weakening window-event responsiveness.
-- Debounce native window-event discovery by 200 milliseconds while keeping explicit Refresh, Arrange, Auto, and hotkey actions immediate.
+- Park disabled tables at minimum size shoulder-to-shoulder from the bottom-right toward the left instead of overlapping them.
+- Debounce native window-event discovery by 200 milliseconds while keeping explicit Arrange, Auto, settings changes, and hotkey actions immediate.
 
 ## Child DOX Index
 

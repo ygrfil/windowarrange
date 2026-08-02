@@ -8,7 +8,7 @@ use std::{
 };
 
 use clubgg_table_arranger::{
-    config::{AppConfig, ConfigStore},
+    config::{AppConfig, ApplicationDefault, ConfigStore},
     controller::{ControllerCommand, spawn_controller},
     layout::{calculate_layout, right_side_free_rect},
     model::{
@@ -118,9 +118,55 @@ fn closing_disabling_and_reordering_preserve_relative_order() {
         .lock()
         .unwrap()
         .retain(|item| item.id != WindowId(3));
-    handle.commands.send(ControllerCommand::Refresh).unwrap();
+    handle
+        .commands
+        .send(ControllerCommand::ForceArrange)
+        .unwrap();
     let closed = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 4);
     assert_eq!(ids(&closed), vec![5, 1, 2, 4]);
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
+fn parked_tables_line_up_from_bottom_right_without_overlap() {
+    let backend = MockBackend::with_tables(3);
+    let store = ConfigStore::at(temp_config_path("parked-shoulder-row"));
+    let config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store);
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 3);
+
+    for id in 1..=3 {
+        handle
+            .commands
+            .send(ControllerCommand::SetEnabled {
+                id: WindowId(id),
+                enabled: false,
+            })
+            .unwrap();
+        let _ = wait_for_snapshot(&handle.snapshots, |snapshot| {
+            snapshot
+                .tables
+                .iter()
+                .find(|table| table.id == WindowId(id))
+                .is_some_and(|table| !table.enabled && table.status == TableStatus::Parked)
+        });
+    }
+
+    let moves = backend.moves.lock().unwrap();
+    let last_rect = |id| {
+        moves
+            .iter()
+            .rev()
+            .find(|(candidate, _)| *candidate == WindowId(id))
+            .map(|(_, rect)| *rect)
+    };
+    assert_eq!(last_rect(1), Some(Rect::new(2512, 924, 240, 180)));
+    assert_eq!(last_rect(2), Some(Rect::new(2272, 924, 240, 180)));
+    assert_eq!(last_rect(3), Some(Rect::new(2032, 924, 240, 180)));
 
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
@@ -196,7 +242,10 @@ fn discovered_windows_keep_session_order_after_screen_positions_change() {
             candidate.rect.left = i32::try_from(index).unwrap() * 100;
         }
     }
-    handle.commands.send(ControllerCommand::Refresh).unwrap();
+    handle
+        .commands
+        .send(ControllerCommand::ForceArrange)
+        .unwrap();
     let refreshed = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.candidates.len() == 3);
     assert_eq!(candidate_ids(&refreshed), vec![1, 2, 3]);
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
@@ -366,7 +415,10 @@ fn ordinary_windows_default_to_ignore_and_can_use_free_space_or_top_right() {
     assert_eq!(candidate_mode(&restored, 10), WindowMode::TopRight);
     assert!(restarted_backend.moves.lock().unwrap().is_empty());
 
-    restarted.commands.send(ControllerCommand::Refresh).unwrap();
+    restarted
+        .commands
+        .send(ControllerCommand::ForceArrange)
+        .unwrap();
     let _ = wait_for_snapshot(&restarted.snapshots, |snapshot| {
         snapshot
             .status_message
@@ -384,6 +436,173 @@ fn ordinary_windows_default_to_ignore_and_can_use_free_space_or_top_right() {
         .commands
         .send(ControllerCommand::Shutdown)
         .unwrap();
+}
+
+#[test]
+fn reserve_two_slots_defaults_on_with_zero_or_one_open_table() {
+    let work_area = Rect::new(0, 0, 2752, 1104);
+    let reserved_layout = calculate_layout(work_area, 2, 4.0 / 3.0);
+    let expected_free = right_side_free_rect(work_area, &reserved_layout.rectangles);
+
+    for table_count in [0, 1] {
+        let backend = MockBackend::with_tables(table_count);
+        let application = ordinary_candidate(10);
+        backend.candidates.lock().unwrap().push(application.clone());
+        let store = ConfigStore::at(temp_config_path(&format!(
+            "reserve-two-slots-{table_count}"
+        )));
+        let mut config = AppConfig {
+            auto_arrange: false,
+            ..AppConfig::default()
+        };
+        config.set_application_disposition(
+            application.signature,
+            clubgg_table_arranger::model::CandidateDisposition::FreeSpace,
+        );
+        let handle = spawn_controller(Arc::new(backend.clone()), config, store);
+        let initial = wait_for_snapshot(&handle.snapshots, |snapshot| {
+            snapshot.tables.len() == table_count
+                && candidate_mode(snapshot, 10) == WindowMode::FreeSpace
+        });
+        assert!(initial.reserve_two_slots);
+        assert!(backend.moves.lock().unwrap().is_empty());
+
+        handle
+            .commands
+            .send(ControllerCommand::ForceArrange)
+            .unwrap();
+        let _ = wait_for_snapshot(&handle.snapshots, |snapshot| {
+            snapshot
+                .status_message
+                .to_ascii_lowercase()
+                .contains("positioned 1 application window")
+        });
+        assert_eq!(
+            backend
+                .moves
+                .lock()
+                .unwrap()
+                .iter()
+                .rev()
+                .find(|(id, _)| *id == WindowId(10))
+                .map(|(_, rect)| *rect),
+            Some(expected_free)
+        );
+
+        handle.commands.send(ControllerCommand::Shutdown).unwrap();
+    }
+}
+
+#[test]
+fn disabling_two_slot_reservation_immediately_reclaims_the_full_empty_display() {
+    let backend = MockBackend::with_tables(0);
+    let application = ordinary_candidate(10);
+    backend.candidates.lock().unwrap().push(application.clone());
+    let store = ConfigStore::at(temp_config_path("disable-two-slot-reservation"));
+    let mut config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    config.set_application_disposition(
+        application.signature,
+        clubgg_table_arranger::model::CandidateDisposition::FreeSpace,
+    );
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store.clone());
+    let initial = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot.reserve_two_slots && candidate_mode(snapshot, 10) == WindowMode::FreeSpace
+    });
+    assert!(initial.reserve_two_slots);
+
+    handle
+        .commands
+        .send(ControllerCommand::SetReserveTwoSlots(false))
+        .unwrap();
+    let disabled = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        !snapshot.reserve_two_slots
+            && snapshot
+                .status_message
+                .to_ascii_lowercase()
+                .contains("positioned 1 application window")
+    });
+    assert!(!disabled.reserve_two_slots);
+    assert_eq!(
+        backend
+            .moves
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(id, _)| *id == WindowId(10))
+            .map(|(_, rect)| *rect),
+        Some(Rect::new(0, 0, 2752, 1104))
+    );
+    assert!(!store.load().unwrap().reserve_two_slots);
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
+fn default_non_poker_mode_is_immediate_persistent_and_overridable() {
+    let backend = MockBackend::with_tables(0);
+    let application = ordinary_candidate(10);
+    backend.candidates.lock().unwrap().push(application.clone());
+    let store = ConfigStore::at(temp_config_path("default-non-poker-mode"));
+    let config = AppConfig {
+        auto_arrange: false,
+        default_application_mode: ApplicationDefault::FreeSpace,
+        ..AppConfig::default()
+    };
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store.clone());
+    let initial = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot.default_application_mode == ApplicationDefault::FreeSpace
+            && candidate_mode(snapshot, 10) == WindowMode::FreeSpace
+    });
+    assert_eq!(
+        initial.default_application_mode,
+        ApplicationDefault::FreeSpace
+    );
+
+    handle
+        .commands
+        .send(ControllerCommand::SetDefaultApplicationMode(
+            ApplicationDefault::TopRight,
+        ))
+        .unwrap();
+    let top = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot.default_application_mode == ApplicationDefault::TopRight
+            && candidate_mode(snapshot, 10) == WindowMode::TopRight
+            && snapshot
+                .status_message
+                .to_ascii_lowercase()
+                .contains("positioned 1 application window")
+    });
+    assert_eq!(top.default_application_mode, ApplicationDefault::TopRight);
+    assert!(
+        backend
+            .moves
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(id, rect)| *id == WindowId(10) && *rect == Rect::new(1852, 0, 900, 700))
+    );
+    assert_eq!(
+        store.load().unwrap().default_application_mode,
+        ApplicationDefault::TopRight
+    );
+
+    handle
+        .commands
+        .send(ControllerCommand::SetWindowMode {
+            id: WindowId(10),
+            mode: WindowMode::Ignored,
+        })
+        .unwrap();
+    let explicit = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        candidate_mode(snapshot, 10) == WindowMode::Ignored
+    });
+    assert_eq!(candidate_mode(&explicit, 10), WindowMode::Ignored);
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
 
 #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "clubgg-table-arranger"
-version = "0.4.11"
+version = "0.5.1"
 edition = "2024"
 rust-version = "1.97.1"
 description = "A focus-safe Windows workspace arranger for ClubGG tables and application windows"
@@ -12,7 +12,7 @@ build = "build.rs"
 name = "table-arranger-control"
 path = "src/main.rs"
 
-[dependencies]
+[target.'cfg(windows)'.dependencies]
 crossbeam-channel = "0.5.16"
 directories = "6.0.0"
 eframe = { version = "0.35.0", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence"] }

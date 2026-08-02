@@ -6,21 +6,26 @@ A Windows-only companion that arranges independently movable ClubGG poker tables
 
 1. Start ClubGG and open one or more poker tables.
 2. Run `Table-Arranger-Control.exe` and approve the Windows administrator prompt.
-3. Review every discovered normal application window in the single compact list.
+3. Review every discovered normal application window in the compact board.
 4. For ClubGG windows, choose **Arrange** to include a table in the equal-size grid, **Park** to shrink it at the bottom-right, or **Ignore** to leave it untouched.
-5. Other application windows default to **Ignore**. Choose **Top-right** to preserve their size at the display corner, or **Fill space** to resize them into the vertical strip to the right of active poker tables.
-6. Click one managed poker table number, then another, to swap their positions. Click the selected number again to cancel, use **◎** to locate a window, or **Arrange** for an immediate reflow.
-7. Minimize the panel to the system tray when desired.
+5. Other application windows default to **Ignore**. Choose **Top-right** to preserve their size at the display corner, or **Fill space** to resize them into the vertical strip to the right of active poker tables. Settings can change this default for newly discovered ordinary windows.
+6. In Settings, leave **2 Slots** enabled to reserve room for two poker tables even when zero or one is open, or turn it off to let Fill space reclaim that width.
+7. Click one managed poker table number, then another, to swap their positions. Click the selected number again to cancel, use **◎** to locate a window, or **Arrange** for an immediate reflow.
+8. Minimize the panel to the system tray when desired.
 
-The compact horizontal panel has a left control rail, click-selectable poker-table tiles, and a separate ordinary-window area. Click one managed poker table number and then another to swap their display positions immediately. The new table order is remembered.
+The compact panel has one top toolbar, click-selectable poker-table tiles, and a separate ordinary-window area. Click one managed poker table number and then another to swap their display positions immediately. The new table order is remembered. Display selection, 2 Slots, default ordinary-window behavior, status, and hotkey details are kept in Settings.
 
-The panel is intentionally small and cannot be maximized. Active poker tables and inactive ClubGG windows are separated into compact groups, while dense two-column grids keep the complete workspace visible without scrolling.
+The panel is intentionally small and cannot be maximized. It automatically fits its height to the number of visible card rows. Active poker tables and inactive ClubGG windows are separated into compact groups, while dense two-column grids keep the complete workspace visible without scrolling.
 
 All window choices are remembered across restarts. Ordinary-window rules use both the identified window title and a stable application fallback, so the behavior still applies when a browser tab or document title changes. Selected windows appear first, parked tables next, and ignored windows last within their areas.
 
-**Refresh** discovers windows and immediately reapplies every selected placement even when Auto is off. Turning **Auto** on also immediately applies both poker-table and ordinary-window placement.
+**Arrange** is the single manual action: it discovers current windows and immediately reapplies every selected placement even when Auto is off. Turning **Auto** on also immediately applies both poker-table and ordinary-window placement.
 
 **Fill space** never changes the poker layout and never places an application below poker tables. It uses the selected monitor's full-height strip from the rightmost active poker edge to the display's right edge. If several application windows use Fill space, they share the same rectangle and can be switched normally.
+
+**2 Slots** is enabled by default and remembered across restarts. With zero or one active table, it reserves the same width as the normal two-table layout before calculating Fill space. The switch changes only application-window geometry; it never creates or moves a placeholder poker table. Toggling it reapplies selected placement immediately even when Auto is off.
+
+Disabled poker tables are parked at their smallest supported size. They line up from the display's bottom-right toward the left instead of overlapping one another.
 
 One to three active tables use the same maximum table size as the four-table layout. On a 2×2 display layout, two tables occupy the top row and three add the bottom-left position. Four or more tables retain optimized equal-size layouts.
 

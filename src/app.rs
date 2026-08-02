@@ -5,7 +5,7 @@ use eframe::egui;
 use tracing::{error, info, warn};
 
 use crate::{
-    config::{AppConfig, ConfigStore, HotkeySettings},
+    config::{AppConfig, ApplicationDefault, ConfigStore, HotkeySettings},
     controller::{ControllerCommand, ControllerHandle, spawn_controller_with_waker},
     hotkeys::{HotkeyAction, HotkeyService},
     identity::{APP_ID, PANEL_TITLE},
@@ -73,9 +73,9 @@ pub fn run() {
         viewport: egui::ViewportBuilder::default()
             .with_app_id(APP_ID)
             .with_title(PANEL_TITLE)
-            .with_inner_size([740.0, 380.0])
-            .with_min_inner_size([680.0, 350.0])
-            .with_max_inner_size([820.0, 460.0])
+            .with_inner_size([740.0, 260.0])
+            .with_min_inner_size([680.0, 180.0])
+            .with_max_inner_size([820.0, 420.0])
             .with_maximize_button(false)
             .with_always_on_top()
             .with_icon(Arc::new(egui_icon())),
@@ -220,41 +220,39 @@ impl TableArrangerApp {
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        let arranged = self
-            .snapshot
-            .candidates
-            .iter()
-            .filter(|window| window.mode == WindowMode::Arranged)
-            .count();
-        let parked = self
-            .snapshot
-            .candidates
-            .iter()
-            .filter(|window| window.mode == WindowMode::Parked)
-            .count();
-        let positioned = self
-            .snapshot
-            .candidates
-            .iter()
-            .filter(|window| matches!(window.mode, WindowMode::TopRight | WindowMode::FreeSpace))
-            .count();
-        let ignored = self
-            .snapshot
-            .candidates
-            .len()
-            .saturating_sub(arranged + parked + positioned);
-
         ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.heading("Workspace");
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{arranged} tables  ·  {positioned} positioned  ·  {parked} parked  ·  {ignored} ignored"
-                    ))
-                    .small()
-                    .color(ui.visuals().weak_text_color()),
-                );
-            });
+            let mut automatic = self.snapshot.auto_arrange;
+            if ui
+                .add_sized(
+                    [64.0, 24.0],
+                    egui::Button::new(if automatic { "Auto ON" } else { "Auto OFF" })
+                        .selected(automatic),
+                )
+                .on_hover_text("Automatically reapply the workspace after window changes")
+                .clicked()
+            {
+                automatic = !automatic;
+                self.send(ControllerCommand::SetAutoArrange(automatic));
+            }
+            if ui
+                .add_sized(
+                    [64.0, 24.0],
+                    egui::Button::new(egui::RichText::new("Arrange").color(egui::Color32::WHITE))
+                        .fill(ACCENT)
+                        .corner_radius(6),
+                )
+                .on_hover_text("Discover windows and immediately reapply all selected placement")
+                .clicked()
+            {
+                self.send(ControllerCommand::ForceArrange);
+            }
+            if ui
+                .add_sized([64.0, 24.0], egui::Button::new("Settings"))
+                .on_hover_text("Workspace, display, defaults, and hotkeys")
+                .clicked()
+            {
+                self.settings_open = true;
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add_sized([26.0, 24.0], egui::Button::new("-"))
@@ -263,92 +261,13 @@ impl TableArrangerApp {
                 {
                     Self::hide_panel(ui.ctx());
                 }
-
-                let selected_text = self
-                    .snapshot
-                    .monitors
-                    .iter()
-                    .find(|monitor| {
-                        Some(&monitor.id) == self.snapshot.selected_monitor.as_ref()
-                    })
-                    .map_or("Select display", |monitor| monitor.label.as_str());
-                egui::ComboBox::from_id_salt("target-display")
-                    .selected_text(selected_text)
-                    .width(180.0)
-                    .show_ui(ui, |ui| {
-                        for monitor in &self.snapshot.monitors {
-                            let selected =
-                                Some(&monitor.id) == self.snapshot.selected_monitor.as_ref();
-                            if ui.selectable_label(selected, &monitor.label).clicked() {
-                                self.send(ControllerCommand::SelectMonitor(monitor.id.clone()));
-                            }
-                        }
-                    });
-                ui.label(
-                    egui::RichText::new("Display")
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
-                );
             });
         })
         .response
     }
 
-    fn control_rail(&mut self, ui: &mut egui::Ui) {
-        let rail_height = ui.available_height();
-        egui::Frame::new()
-            .fill(ui.visuals().faint_bg_color)
-            .corner_radius(7)
-            .inner_margin(egui::Margin::symmetric(4, 5))
-            .show(ui, |ui| {
-                ui.set_width(52.0);
-                ui.set_min_height((rail_height - 10.0).max(0.0));
-                let mut automatic = self.snapshot.auto_arrange;
-                if ui
-                    .add_sized(
-                        [52.0, 26.0],
-                        egui::Button::new(if automatic { "Auto ON" } else { "Auto OFF" })
-                            .selected(automatic),
-                    )
-                    .on_hover_text("Automatically reapply the complete workspace after changes")
-                    .clicked()
-                {
-                    automatic = !automatic;
-                    self.send(ControllerCommand::SetAutoArrange(automatic));
-                }
-                if ui
-                    .add_sized(
-                        [52.0, 26.0],
-                        egui::Button::new(
-                            egui::RichText::new("Arrange").color(egui::Color32::WHITE),
-                        )
-                        .fill(ACCENT)
-                        .corner_radius(7),
-                    )
-                    .on_hover_text("Arrange poker tables and selected application windows now")
-                    .clicked()
-                {
-                    self.send(ControllerCommand::ForceArrange);
-                }
-                if ui
-                    .add_sized([52.0, 26.0], egui::Button::new("Refresh"))
-                    .on_hover_text("Discover windows again and reapply selected placement")
-                    .clicked()
-                {
-                    self.send(ControllerCommand::Refresh);
-                }
-                if ui
-                    .add_sized([52.0, 26.0], egui::Button::new("Settings"))
-                    .on_hover_text("Hotkeys and settings")
-                    .clicked()
-                {
-                    self.settings_open = true;
-                }
-            });
-    }
-
     fn workspace(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(5.0);
+        ui.add_space(2.0);
         if self.snapshot.candidates.is_empty() {
             egui::Frame::new()
                 .fill(ui.visuals().faint_bg_color)
@@ -358,7 +277,7 @@ impl TableArrangerApp {
                     ui.vertical_centered(|ui| {
                         ui.label(egui::RichText::new("No application windows found").strong());
                         ui.label(
-                            egui::RichText::new("Open an application, then press Refresh.")
+                            egui::RichText::new("Open an application, then press Arrange.")
                                 .small()
                                 .color(ui.visuals().weak_text_color()),
                         );
@@ -403,7 +322,7 @@ impl TableArrangerApp {
             .collect();
 
         if windows.is_empty() {
-            empty_section(ui, "No ClubGG windows", "Open a table and press Refresh.");
+            empty_section(ui, "No ClubGG windows", "Open a table and press Arrange.");
             return;
         }
 
@@ -565,30 +484,6 @@ impl TableArrangerApp {
         }
     }
 
-    fn status_line(&self, ui: &mut egui::Ui) {
-        let has_failure = self.snapshot.tables.iter().any(|table| {
-            matches!(
-                table.status,
-                TableStatus::AccessDenied | TableStatus::MoveFailed(_)
-            )
-        }) || self.snapshot.candidates.iter().any(|window| {
-            matches!(
-                window.status,
-                Some(TableStatus::AccessDenied | TableStatus::MoveFailed(_))
-            )
-        });
-        let color = if has_failure {
-            ui.visuals().error_fg_color
-        } else {
-            ui.visuals().weak_text_color()
-        };
-        ui.label(
-            egui::RichText::new(&self.snapshot.status_message)
-                .small()
-                .color(color),
-        );
-    }
-
     fn application_tile(&mut self, ui: &mut egui::Ui, window: &CandidateView) {
         let card_fill = if ui.visuals().dark_mode {
             egui::Color32::from_gray(27)
@@ -727,50 +622,177 @@ impl TableArrangerApp {
 
     fn settings_window(&mut self, context: &egui::Context) {
         let mut open = self.settings_open;
-        egui::Window::new("Hotkeys")
+        egui::Window::new("Settings")
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
-            .default_width(320.0)
+            .default_width(360.0)
             .show(context, |ui| {
+                let active = self
+                    .snapshot
+                    .candidates
+                    .iter()
+                    .filter(|window| window.mode == WindowMode::Arranged)
+                    .count();
+                let parked = self
+                    .snapshot
+                    .candidates
+                    .iter()
+                    .filter(|window| window.mode == WindowMode::Parked)
+                    .count();
+                let positioned = self
+                    .snapshot
+                    .candidates
+                    .iter()
+                    .filter(|window| {
+                        matches!(window.mode, WindowMode::TopRight | WindowMode::FreeSpace)
+                    })
+                    .count();
+                let ignored = self
+                    .snapshot
+                    .candidates
+                    .len()
+                    .saturating_sub(active + parked + positioned);
+
+                ui.label(egui::RichText::new("Workspace").strong());
                 ui.label(
-                    egui::RichText::new("Global shortcuts")
+                    egui::RichText::new(format!(
+                        "{active} active · {parked} parked · {positioned} positioned · {ignored} ignored"
+                    ))
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
+                );
+                let has_failure = self.snapshot.tables.iter().any(|table| {
+                    matches!(
+                        table.status,
+                        TableStatus::AccessDenied | TableStatus::MoveFailed(_)
+                    )
+                }) || self.snapshot.candidates.iter().any(|window| {
+                    matches!(
+                        window.status,
+                        Some(TableStatus::AccessDenied | TableStatus::MoveFailed(_))
+                    )
+                });
+                let status_color = if has_failure {
+                    ui.visuals().error_fg_color
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                ui.label(
+                    egui::RichText::new(&self.snapshot.status_message)
+                        .small()
+                        .color(status_color),
+                );
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    ui.label("Display");
+                    let selected_text = self
+                        .snapshot
+                        .monitors
+                        .iter()
+                        .find(|monitor| {
+                            Some(&monitor.id) == self.snapshot.selected_monitor.as_ref()
+                        })
+                        .map_or("Select display", |monitor| monitor.label.as_str());
+                    egui::ComboBox::from_id_salt("settings-target-display")
+                        .selected_text(selected_text)
+                        .width(250.0)
+                        .show_ui(ui, |ui| {
+                            for monitor in &self.snapshot.monitors {
+                                let selected =
+                                    Some(&monitor.id) == self.snapshot.selected_monitor.as_ref();
+                                if ui.selectable_label(selected, &monitor.label).clicked() {
+                                    self.send(ControllerCommand::SelectMonitor(
+                                        monitor.id.clone(),
+                                    ));
+                                }
+                            }
+                        });
+                });
+
+                let mut reserve_two = self.snapshot.reserve_two_slots;
+                if ui
+                    .checkbox(&mut reserve_two, "Reserve space for 2 poker-table slots")
+                    .on_hover_text(
+                        "Keep the two-table right boundary when zero or one table is open",
+                    )
+                    .changed()
+                {
+                    self.send(ControllerCommand::SetReserveTwoSlots(reserve_two));
+                }
+
+                ui.label("Default for new non-poker windows");
+                let mut default_mode = self.snapshot.default_application_mode;
+                ui.horizontal(|ui| {
+                    ui.selectable_value(
+                        &mut default_mode,
+                        ApplicationDefault::Ignored,
+                        "Ignore",
+                    );
+                    ui.selectable_value(
+                        &mut default_mode,
+                        ApplicationDefault::FreeSpace,
+                        "Free",
+                    );
+                    ui.selectable_value(
+                        &mut default_mode,
+                        ApplicationDefault::TopRight,
+                        "Top",
+                    );
+                });
+                if default_mode != self.snapshot.default_application_mode {
+                    self.send(ControllerCommand::SetDefaultApplicationMode(default_mode));
+                }
+                ui.label(
+                    egui::RichText::new("Saved choices on individual windows take priority.")
                         .small()
                         .color(ui.visuals().weak_text_color()),
                 );
-                shortcut_field(ui, "Arrange", &mut self.shortcut_draft.arrange_now);
-                shortcut_field(
-                    ui,
-                    "Toggle focused",
-                    &mut self.shortcut_draft.toggle_focused,
-                );
-                shortcut_field(ui, "Show panel", &mut self.shortcut_draft.show_panel);
                 ui.separator();
-                for (index, shortcut) in self.shortcut_draft.toggle_slots.iter_mut().enumerate() {
-                    shortcut_field(ui, &format!("Table {}", index + 1), shortcut);
-                }
-                ui.add_space(3.0);
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 22.0],
-                        egui::Button::new(
-                            egui::RichText::new("Apply hotkeys").color(egui::Color32::WHITE),
-                        )
-                        .fill(ACCENT)
-                        .corner_radius(5),
-                    )
-                    .clicked()
-                {
-                    self.shortcut_errors = self.hotkeys.as_mut().map_or_else(
-                        || vec!["Global hotkey service is unavailable.".to_owned()],
-                        |service| service.apply(&self.shortcut_draft),
-                    );
-                    self.send(ControllerCommand::SetHotkeys(self.shortcut_draft.clone()));
-                }
-                for error in &self.shortcut_errors {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                }
-                ui.add_space(4.0);
+
+                egui::CollapsingHeader::new("Global hotkeys")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        shortcut_field(ui, "Arrange", &mut self.shortcut_draft.arrange_now);
+                        shortcut_field(
+                            ui,
+                            "Toggle focused",
+                            &mut self.shortcut_draft.toggle_focused,
+                        );
+                        shortcut_field(ui, "Show panel", &mut self.shortcut_draft.show_panel);
+                        ui.separator();
+                        for (index, shortcut) in
+                            self.shortcut_draft.toggle_slots.iter_mut().enumerate()
+                        {
+                            shortcut_field(ui, &format!("Table {}", index + 1), shortcut);
+                        }
+                        ui.add_space(3.0);
+                        if ui
+                            .add_sized(
+                                [ui.available_width(), 22.0],
+                                egui::Button::new(
+                                    egui::RichText::new("Apply hotkeys")
+                                        .color(egui::Color32::WHITE),
+                                )
+                                .fill(ACCENT)
+                                .corner_radius(5),
+                            )
+                            .clicked()
+                        {
+                            self.shortcut_errors = self.hotkeys.as_mut().map_or_else(
+                                || vec!["Global hotkey service is unavailable.".to_owned()],
+                                |service| service.apply(&self.shortcut_draft),
+                            );
+                            self.send(ControllerCommand::SetHotkeys(
+                                self.shortcut_draft.clone(),
+                            ));
+                        }
+                        for error in &self.shortcut_errors {
+                            ui.colored_label(ui.visuals().error_fg_color, error);
+                        }
+                    });
+
                 ui.label(
                     egui::RichText::new(format!(
                         "Version {} · administrator mode",
@@ -783,29 +805,23 @@ impl TableArrangerApp {
         self.settings_open = open;
     }
 
-    fn workspace_row(&mut self, ui: &mut egui::Ui) -> [egui::Rect; 2] {
-        let mut rail_rect = egui::Rect::NOTHING;
-        let mut workspace_rect = egui::Rect::NOTHING;
-        ui.horizontal_top(|ui| {
-            let height = ui.available_height();
-            rail_rect = ui
-                .allocate_ui_with_layout(
-                    egui::vec2(60.0, height),
-                    egui::Layout::top_down(egui::Align::Center),
-                    |ui| self.control_rail(ui),
-                )
-                .response
-                .rect;
-            workspace_rect = ui
-                .allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| self.workspace(ui),
-                )
-                .response
-                .rect;
-        });
-        [rail_rect, workspace_rect]
+    fn fit_panel_height(&self, context: &egui::Context) {
+        let target_height = if self.settings_open {
+            420.0
+        } else {
+            desired_panel_height(&self.snapshot)
+        };
+        let current = context.input(|input| input.viewport().inner_rect);
+        let current_height = current.map_or(0.0, |rect| rect.height());
+        if (current_height - target_height).abs() > 1.0 {
+            let width = current
+                .map_or(740.0, |rect| rect.width())
+                .clamp(680.0, 820.0);
+            context.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                width,
+                target_height,
+            )));
+        }
     }
 }
 
@@ -818,21 +834,56 @@ impl eframe::App for TableArrangerApp {
         egui::Frame::central_panel(ui.style())
             .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
-                ui.take_available_space();
                 self.top_bar(ui);
-                self.status_line(ui);
                 ui.separator();
-                let _ = self.workspace_row(ui);
+                self.workspace(ui);
             });
         if self.settings_open {
             self.settings_window(ui.ctx());
         }
+        self.fit_panel_height(ui.ctx());
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.send(ControllerCommand::Shutdown);
         info!("Table Arranger Control stopped");
     }
+}
+
+fn desired_panel_height(snapshot: &UiSnapshot) -> f32 {
+    const PANEL_CHROME_HEIGHT: f32 = 68.0;
+    let active = snapshot
+        .candidates
+        .iter()
+        .filter(|window| window.is_clubgg && window.mode == WindowMode::Arranged)
+        .count();
+    let inactive = snapshot
+        .candidates
+        .iter()
+        .filter(|window| window.is_clubgg && window.mode != WindowMode::Arranged)
+        .count();
+    let applications = snapshot
+        .candidates
+        .iter()
+        .filter(|window| !window.is_clubgg)
+        .count();
+    let active_rows = active.div_ceil(2);
+    let inactive_rows = inactive.div_ceil(2);
+    let poker_rows = active_rows + inactive_rows;
+    let poker_gaps = active_rows.saturating_sub(1) + inactive_rows.saturating_sub(1);
+    let poker_height = poker_rows as f32 * 48.0
+        + poker_gaps as f32 * 4.0
+        + if active_rows > 0 && inactive_rows > 0 {
+            8.0
+        } else {
+            0.0
+        };
+    let application_rows = applications.div_ceil(2);
+    let application_height =
+        application_rows as f32 * 62.0 + application_rows.saturating_sub(1) as f32 * 4.0;
+    let cards_height = poker_height.max(application_height).max(62.0);
+
+    (PANEL_CHROME_HEIGHT + cards_height).clamp(180.0, 420.0)
 }
 
 fn table_slot_click(
@@ -1219,17 +1270,40 @@ mod tests {
                 bounds.bottom()
             );
         });
-        egui::__run_test_ui(|ui| {
-            ui.set_width(700.0);
-            ui.set_height(280.0);
-            let [rail, workspace] = app.workspace_row(ui);
-            assert!(
-                (rail.top() - workspace.top()).abs() <= 1.0,
-                "rail top {} did not align with workspace top {}",
-                rail.top(),
-                workspace.top()
-            );
-        });
+        assert_eq!(super::desired_panel_height(&app.snapshot), 328.0);
+        assert_eq!(super::desired_panel_height(&UiSnapshot::default()), 180.0);
+    }
+
+    #[test]
+    fn fitted_height_keeps_the_last_parked_table_visible() {
+        let snapshot = UiSnapshot {
+            candidates: (0..8)
+                .map(|index| CandidateView {
+                    id: WindowId(index + 1),
+                    label: format!("Window {index}"),
+                    process_name: if index < 5 {
+                        "ClubGG.exe".to_owned()
+                    } else {
+                        "application.exe".to_owned()
+                    },
+                    class_name: "TestWindow".to_owned(),
+                    is_clubgg: index < 5,
+                    likely_table: index < 5,
+                    mode: if index < 2 {
+                        WindowMode::Arranged
+                    } else if index < 5 {
+                        WindowMode::Parked
+                    } else {
+                        WindowMode::TopRight
+                    },
+                    slot: (index < 2).then_some(index as usize + 1),
+                    status: None,
+                })
+                .collect(),
+            ..UiSnapshot::default()
+        };
+
+        assert_eq!(super::desired_panel_height(&snapshot), 224.0);
     }
 
     #[test]

@@ -12,7 +12,7 @@ use crossbeam_channel::{Receiver, Sender, bounded};
 use tracing::{info, warn};
 
 use crate::{
-    config::{AppConfig, ConfigStore, HotkeySettings},
+    config::{AppConfig, ApplicationDefault, ConfigStore, HotkeySettings},
     layout::{DEFAULT_ASPECT_RATIO, calculate_layout, right_side_free_rect},
     model::{
         BackendError, CandidateDisposition, CandidateView, ManagedTable, MonitorInfo, Rect,
@@ -31,9 +31,10 @@ pub type UiWake = Arc<dyn Fn() + Send + Sync>;
 #[derive(Clone, Debug)]
 pub enum ControllerCommand {
     ForceArrange,
-    Refresh,
     NativeWindowEvent(&'static AtomicBool),
     SetAutoArrange(bool),
+    SetReserveTwoSlots(bool),
+    SetDefaultApplicationMode(ApplicationDefault),
     SetEnabled { id: WindowId, enabled: bool },
     ToggleFocused,
     ToggleSlot(usize),
@@ -183,8 +184,7 @@ impl Controller {
 
     fn handle(&mut self, command: ControllerCommand) {
         match command {
-            ControllerCommand::ForceArrange => self.arrange(),
-            ControllerCommand::Refresh => {
+            ControllerCommand::ForceArrange => {
                 self.discovery_due = None;
                 self.reconcile();
                 self.arrange();
@@ -203,6 +203,17 @@ impl Controller {
                 } else {
                     self.publish();
                 }
+            }
+            ControllerCommand::SetReserveTwoSlots(enabled) => {
+                self.config.reserve_two_slots = enabled;
+                self.save_config();
+                self.arrange();
+            }
+            ControllerCommand::SetDefaultApplicationMode(mode) => {
+                self.config.default_application_mode = mode;
+                self.save_config();
+                self.reconcile();
+                self.arrange();
             }
             ControllerCommand::SetEnabled { id, enabled } => {
                 self.set_enabled(id, enabled);
@@ -264,8 +275,6 @@ impl Controller {
         self.save_config();
         if enabled {
             self.tables[index].status = TableStatus::Ready;
-        } else {
-            self.park(index);
         }
         self.arrange();
     }
@@ -306,7 +315,6 @@ impl Controller {
                 }
                 WindowMode::Parked => {
                     self.tables[index].enabled = false;
-                    self.park(index);
                 }
                 WindowMode::TopRight | WindowMode::FreeSpace | WindowMode::Ignored => {}
             }
@@ -368,7 +376,7 @@ impl Controller {
 
         let mut table_order_changed = false;
         for candidate in &candidates {
-            let disposition = self.config.disposition_for(&candidate.signature);
+            let disposition = self.disposition_for_candidate(candidate);
             let should_manage = match disposition {
                 Some(CandidateDisposition::Table | CandidateDisposition::Parked) => true,
                 Some(
@@ -449,10 +457,14 @@ impl Controller {
             self.save_config();
         }
 
-        for index in 0..self.tables.len() {
-            if !self.tables[index].enabled && self.tables[index].status != TableStatus::Parked {
-                self.park(index);
-            }
+        if table_set_changed
+            || monitor_changed
+            || self
+                .tables
+                .iter()
+                .any(|table| !table.enabled && table.status != TableStatus::Parked)
+        {
+            self.park_all();
         }
 
         if table_set_changed || positioned_set_changed || monitor_changed {
@@ -488,12 +500,23 @@ impl Controller {
             .iter()
             .filter_map(|candidate| {
                 matches!(
-                    self.config.disposition_for(&candidate.signature),
+                    self.disposition_for_candidate(candidate),
                     Some(CandidateDisposition::TopRight | CandidateDisposition::FreeSpace)
                 )
                 .then_some(candidate.id)
             })
             .collect()
+    }
+
+    fn disposition_for_candidate(
+        &self,
+        candidate: &WindowCandidate,
+    ) -> Option<CandidateDisposition> {
+        self.config
+            .disposition_for(&candidate.signature)
+            .or_else(|| {
+                (!candidate.is_clubgg).then(|| self.config.default_application_mode.disposition())
+            })
     }
 
     fn selected_monitor(&self) -> Option<&MonitorInfo> {
@@ -591,6 +614,8 @@ impl Controller {
             }
         }
 
+        self.park_all();
+
         let (positioned_requested, positioned_moved, positioned_failed, positioned_denied) =
             self.position_other_windows(&monitor);
         failed_count += positioned_failed;
@@ -639,18 +664,25 @@ impl Controller {
     }
 
     fn position_other_windows(&mut self, monitor: &MonitorInfo) -> (usize, usize, usize, usize) {
-        let occupied: Vec<_> = self
+        let mut occupied: Vec<_> = self
             .tables
             .iter()
             .filter(|table| table.enabled)
             .map(|table| table.last_active_rect)
             .collect();
+        if self.config.reserve_two_slots && occupied.len() < 2 {
+            let ratio = self
+                .config
+                .table_aspect_ratio
+                .unwrap_or(DEFAULT_ASPECT_RATIO);
+            occupied.extend(calculate_layout(monitor.work_area, 2, ratio).rectangles);
+        }
         let free_rect = right_side_free_rect(monitor.work_area, &occupied);
         let selected: Vec<_> = self
             .candidates
             .iter()
             .filter_map(|candidate| {
-                let mode = match self.config.disposition_for(&candidate.signature) {
+                let mode = match self.disposition_for_candidate(candidate) {
                     Some(CandidateDisposition::TopRight) => WindowMode::TopRight,
                     Some(CandidateDisposition::FreeSpace) => WindowMode::FreeSpace,
                     _ => return None,
@@ -716,7 +748,7 @@ impl Controller {
         (selected.len(), moved, failed, access_denied)
     }
 
-    fn park(&mut self, index: usize) {
+    fn park_all(&mut self) {
         let Some(monitor) = self.selected_monitor().cloned() else {
             return;
         };
@@ -724,23 +756,52 @@ impl Controller {
             .config
             .table_aspect_ratio
             .unwrap_or(DEFAULT_ASPECT_RATIO);
-        let size = self
-            .backend
-            .minimum_size(self.tables[index].id, ratio)
-            .unwrap_or_else(|_| crate::model::Size::new(240, 180));
-        let rect = Rect::new(
-            monitor.work_area.right().saturating_sub(size.width),
-            monitor.work_area.bottom().saturating_sub(size.height),
-            size.width,
-            size.height,
-        );
-        match self.backend.move_resize(self.tables[index].id, rect) {
-            Ok(_) => self.tables[index].status = TableStatus::Parked,
-            Err(BackendError::AccessDenied) => {
-                self.tables[index].status = TableStatus::AccessDenied;
+        let parked: Vec<_> = self
+            .tables
+            .iter()
+            .enumerate()
+            .filter_map(|(index, table)| (!table.enabled).then_some(index))
+            .collect();
+        let mut cursor_right = monitor.work_area.right();
+        let mut cursor_bottom = monitor.work_area.bottom();
+        let mut row_height = 0_i32;
+
+        for index in parked {
+            let size = self
+                .backend
+                .minimum_size(self.tables[index].id, ratio)
+                .unwrap_or_else(|_| crate::model::Size::new(240, 180));
+            let width = size.width.clamp(1, monitor.work_area.width);
+            let height = size.height.clamp(1, monitor.work_area.height);
+            if cursor_right.saturating_sub(width) < monitor.work_area.left {
+                cursor_right = monitor.work_area.right();
+                cursor_bottom = cursor_bottom.saturating_sub(row_height);
+                row_height = 0;
             }
-            Err(error) => {
-                self.tables[index].status = TableStatus::MoveFailed(error.to_string());
+            let rect = Rect::new(
+                cursor_right.saturating_sub(width),
+                cursor_bottom
+                    .saturating_sub(height)
+                    .max(monitor.work_area.top),
+                width,
+                height,
+            );
+            match self.backend.move_resize(self.tables[index].id, rect) {
+                Ok(actual) => {
+                    self.tables[index].status = TableStatus::Parked;
+                    cursor_right = actual.left;
+                    row_height = row_height.max(actual.height);
+                }
+                Err(BackendError::AccessDenied) => {
+                    self.tables[index].status = TableStatus::AccessDenied;
+                    cursor_right = rect.left;
+                    row_height = row_height.max(height);
+                }
+                Err(error) => {
+                    self.tables[index].status = TableStatus::MoveFailed(error.to_string());
+                    cursor_right = rect.left;
+                    row_height = row_height.max(height);
+                }
             }
         }
     }
@@ -794,7 +855,7 @@ impl Controller {
                     .iter()
                     .find(|table| table.id == candidate.id)
                     .map_or_else(
-                        || match self.config.disposition_for(&candidate.signature) {
+                        || match self.disposition_for_candidate(candidate) {
                             Some(CandidateDisposition::TopRight) => WindowMode::TopRight,
                             Some(CandidateDisposition::FreeSpace) => WindowMode::FreeSpace,
                             _ => WindowMode::Ignored,
@@ -826,6 +887,8 @@ impl Controller {
             monitors: self.monitors.clone(),
             selected_monitor: self.selected_monitor().map(|monitor| monitor.id.clone()),
             auto_arrange: self.config.auto_arrange,
+            reserve_two_slots: self.config.reserve_two_slots,
+            default_application_mode: self.config.default_application_mode,
             aspect_ratio: self
                 .config
                 .table_aspect_ratio

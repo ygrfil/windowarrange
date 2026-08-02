@@ -9,7 +9,27 @@ use thiserror::Error;
 
 use crate::model::{CandidateDisposition, WindowSignature};
 
-const CONFIG_VERSION: u32 = 4;
+const CONFIG_VERSION: u32 = 6;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationDefault {
+    #[default]
+    Ignored,
+    FreeSpace,
+    TopRight,
+}
+
+impl ApplicationDefault {
+    #[must_use]
+    pub const fn disposition(self) -> CandidateDisposition {
+        match self {
+            Self::Ignored => CandidateDisposition::Ignored,
+            Self::FreeSpace => CandidateDisposition::FreeSpace,
+            Self::TopRight => CandidateDisposition::TopRight,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HotkeySettings {
@@ -42,6 +62,8 @@ pub struct AppConfig {
     pub version: u32,
     pub selected_monitor: Option<String>,
     pub auto_arrange: bool,
+    pub reserve_two_slots: bool,
+    pub default_application_mode: ApplicationDefault,
     pub table_aspect_ratio: Option<f64>,
     pub detection_rules: Vec<DetectionRule>,
     pub table_order: Vec<WindowSignature>,
@@ -54,6 +76,8 @@ impl Default for AppConfig {
             version: CONFIG_VERSION,
             selected_monitor: None,
             auto_arrange: true,
+            reserve_two_slots: true,
+            default_application_mode: ApplicationDefault::Ignored,
             table_aspect_ratio: None,
             detection_rules: Vec::new(),
             table_order: Vec::new(),
@@ -147,7 +171,7 @@ impl ConfigStore {
 
     #[must_use]
     pub fn ui_state_path(&self) -> PathBuf {
-        self.path.with_file_name("ui-state-v3.ron")
+        self.path.with_file_name("ui-state-v4.ron")
     }
 
     pub fn load(&self) -> Result<AppConfig, ConfigError> {
@@ -156,7 +180,7 @@ impl ConfigStore {
         }
         let contents = fs::read_to_string(&self.path)?;
         let mut config: AppConfig = serde_json::from_str(&contents)?;
-        if config.version < CONFIG_VERSION {
+        if config.version < 4 {
             let application_rules: Vec<_> = config
                 .detection_rules
                 .iter()
@@ -253,5 +277,13 @@ mod tests {
             }),
             Some(CandidateDisposition::TopRight)
         );
+    }
+
+    #[test]
+    fn older_configurations_default_to_reserving_two_slots() {
+        let config: AppConfig = serde_json::from_str(r#"{"version":4}"#).unwrap();
+
+        assert!(config.reserve_two_slots);
+        assert_eq!(config.default_application_mode, ApplicationDefault::Ignored);
     }
 }

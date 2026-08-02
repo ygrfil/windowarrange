@@ -1,4 +1,5 @@
-#![cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg(not(target_os = "windows"))]
+compile_error!("Table Arranger Control supports Windows only");
 
 pub mod app;
 pub mod config;
