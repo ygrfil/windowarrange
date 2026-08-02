@@ -37,17 +37,17 @@ use windows::{
             Accessibility::{HWINEVENTHOOK, SetWinEventHook},
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             WindowsAndMessaging::{
-                EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE,
+                BringWindowToTop, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE,
                 EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, EnumWindows, FLASHW_ALL,
                 FLASHW_TIMERNOFG, FLASHWINFO, FindWindowW, FlashWindowEx, GA_ROOT, GWL_EXSTYLE,
                 GWL_STYLE, GetAncestor, GetClassNameW, GetForegroundWindow, GetMessageW,
                 GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
                 GetWindowThreadProcessId, IsIconic, IsWindowVisible, MINMAXINFO,
-                MONITORINFOF_PRIMARY, MSG, OBJID_WINDOW, SMTO_ABORTIFHUNG, SW_SHOWNOACTIVATE,
-                SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
-                SendMessageTimeoutW, SetForegroundWindow, SetWindowPos, ShowWindowAsync,
-                WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_GETMINMAXINFO, WS_CHILD,
-                WS_DISABLED, WS_EX_TOOLWINDOW,
+                MONITORINFOF_PRIMARY, MSG, OBJID_WINDOW, SMTO_ABORTIFHUNG, SW_RESTORE,
+                SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
+                SWP_NOZORDER, SendMessageTimeoutW, SetForegroundWindow, SetWindowPos,
+                ShowWindowAsync, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_GETMINMAXINFO,
+                WS_CHILD, WS_DISABLED, WS_EX_TOOLWINDOW,
             },
         },
     },
@@ -229,16 +229,23 @@ impl WindowBackend for Win32Backend {
         Ok(Size::new(width.max(200), height))
     }
 
-    fn highlight(&self, id: WindowId) -> Result<(), BackendError> {
-        let info = FLASHWINFO {
-            cbSize: u32::try_from(size_of::<FLASHWINFO>()).unwrap_or(u32::MAX),
-            hwnd: hwnd_from_id(id),
-            dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
-            uCount: 3,
-            dwTimeout: 0,
-        };
+    fn locate(&self, id: WindowId) -> Result<(), BackendError> {
+        let hwnd = hwnd_from_id(id);
         unsafe {
-            let _ = FlashWindowEx(&raw const info);
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindowAsync(hwnd, SW_RESTORE);
+            }
+            BringWindowToTop(hwnd).map_err(map_windows_error)?;
+            if !SetForegroundWindow(hwnd).as_bool() {
+                let info = FLASHWINFO {
+                    cbSize: u32::try_from(size_of::<FLASHWINFO>()).unwrap_or(u32::MAX),
+                    hwnd,
+                    dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
+                    uCount: 3,
+                    dwTimeout: 0,
+                };
+                let _ = FlashWindowEx(&raw const info);
+            }
         }
         Ok(())
     }

@@ -69,7 +69,7 @@ Default section order:
 - Build a Windows-only Rust 2024 desktop application named **Table Arranger Control**. Do not provide, retain, or package macOS or Linux runtime support; application dependencies must be Windows-targeted.
 - Prefer safe Rust. Confine Win32 `unsafe` operations to the native backend and expose safe typed interfaces.
 - Manage only user-approved window geometry. Never automate poker actions, read cards, click controls, or alter application internals.
-- Preserve table focus and Z-order while arranging. Never surprise-move real ClubGG windows from automated tests.
+- Preserve table focus and Z-order while arranging. The explicit user-clicked **Locate** action is the only exception: restore, raise, and request foreground focus for that selected window. Never surprise-move real ClubGG windows from automated tests.
 - Preserve the table aspect ratio, use equal outer dimensions, and anchor layouts at the selected monitor's top-left working area. For 1–3 active tables, reuse the four-table grid size and first row-major slots; for 4+ tables, maximize equal per-table area. Above four tables, preserve slots 1–4 as the original 2×2 block and add slots 5–8 in top/bottom vertical pairs extending right.
 - Support stable ordering, automatic reflow, enabled/parked tables, configurable hotkeys, a floating panel, and tray operation.
 - Discover normal visible top-level application windows while excluding the arranger, desktop/taskbar shell surfaces, cloaked windows, child windows, disabled windows, and non-ClubGG tool windows.
@@ -154,6 +154,7 @@ Before delivery, run:
 - Reserve the poker width of two slots for Fill-space applications by default even when zero or one table is open; remember the user's 2 Slots switch choice across restarts.
 - Remember ordinary-window behavior across restarts even when its title changes, and remember table order after click-to-swap reordering.
 - Keep every primary toolbar action visible without overlap and avoid decorative glyphs that are missing from the bundled font.
+- Make Locate restore and raise the chosen window so it is visible above windows that were covering it; requesting foreground focus is expected for this explicit action.
 - Keep idle RAM, GPU-memory, and CPU use proportionate to a compact control utility without weakening window-event responsiveness.
 - Park disabled tables at minimum size shoulder-to-shoulder from the bottom-right toward the left instead of overlapping them.
 - Debounce native window-event discovery by 200 milliseconds while keeping explicit Arrange, Auto, settings changes, and hotkey actions immediate.

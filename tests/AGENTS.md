@@ -16,6 +16,7 @@
 - Live tests require an explicit ignored/manual entry point and visible user initiation.
 - Tests must not depend on monitor resolution, locale, or table titles.
 - Controller tests must verify that denied or failed moves are reported as failures rather than successful arrangements.
+- Controller tests must verify that an explicit Locate command is dispatched to the selected window without coupling it to arrangement.
 - Controller tests must verify stable discovered-window order, contextual poker/application modes, ordinary-window default Ignore behavior, and persistence of all states.
 - Controller tests must verify process/class fallback across an ordinary window title change, immediate ordinary-window placement on Arrange and Auto enable, configurable default behavior with explicit-rule precedence, and table-order restoration after restart.
 - Manual UI checks must cover automatic panel-height fitting, full background painting, visible toolbar actions, bounded poker/application panes, 1–8 tables plus ordinary-window choices visible without scrolling, and bundled-font glyph rendering.

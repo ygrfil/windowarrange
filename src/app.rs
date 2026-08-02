@@ -430,7 +430,7 @@ impl TableArrangerApp {
                         .on_hover_text("Locate this window")
                         .clicked()
                     {
-                        self.send(ControllerCommand::Highlight(window.id));
+                        self.send(ControllerCommand::Locate(window.id));
                     }
                 });
                 self.poker_window_controls(ui, window);
@@ -523,7 +523,7 @@ impl TableArrangerApp {
                         .on_hover_text("Locate this window")
                         .clicked()
                     {
-                        self.send(ControllerCommand::Highlight(window.id));
+                        self.send(ControllerCommand::Locate(window.id));
                     }
                 });
                 ui.add_space(1.0);

@@ -5,7 +5,7 @@
 # Ownership
 
 - `lib.rs` defines the reusable module boundary shared by the executable and integration tests.
-- `win32.rs` owns native enumeration, process inspection, monitor APIs, movement, highlighting, DPI, and integrity errors.
+- `win32.rs` owns native enumeration, process inspection, monitor APIs, movement, explicit Locate activation, DPI, and integrity errors.
 - `layout.rs` owns pure, deterministic table geometry and right-side free-strip calculation.
 - `model.rs` owns shared typed state.
 - `controller.rs` owns discovery reconciliation, ordering, enabled state, debounce, and arrangement.
@@ -20,6 +20,7 @@
 
 - Confine `unsafe` blocks to native integration modules and document each safety boundary.
 - Never activate or reorder target windows while arranging.
+- Locate is the deliberate exception to arrangement focus safety: restore a minimized target, raise it in Z-order, request foreground focus, and flash only as a fallback when Windows denies foreground activation.
 - Never persist transient `HWND` values across processes or launches.
 - Keep the controller as the sole mutable owner of managed-table order and enabled state.
 - Keep layout calculation independent of Win32, eframe, and global state.

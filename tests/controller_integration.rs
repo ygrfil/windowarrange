@@ -21,6 +21,7 @@ use clubgg_table_arranger::{
 struct MockBackend {
     candidates: Arc<Mutex<Vec<WindowCandidate>>>,
     moves: Arc<Mutex<Vec<(WindowId, Rect)>>>,
+    located: Arc<Mutex<Vec<WindowId>>>,
     foreground: Arc<Mutex<Option<WindowId>>>,
     deny_moves: Arc<AtomicBool>,
 }
@@ -31,6 +32,7 @@ impl MockBackend {
         Self {
             candidates: Arc::new(Mutex::new(candidates)),
             moves: Arc::new(Mutex::new(Vec::new())),
+            located: Arc::new(Mutex::new(Vec::new())),
             foreground: Arc::new(Mutex::new(None)),
             deny_moves: Arc::new(AtomicBool::new(false)),
         }
@@ -63,13 +65,34 @@ impl WindowBackend for MockBackend {
         Ok(Size::new(240, 180))
     }
 
-    fn highlight(&self, _id: WindowId) -> Result<(), BackendError> {
+    fn locate(&self, id: WindowId) -> Result<(), BackendError> {
+        self.located.lock().unwrap().push(id);
         Ok(())
     }
 
     fn foreground_window(&self) -> Option<WindowId> {
         *self.foreground.lock().unwrap()
     }
+}
+
+#[test]
+fn locate_command_reaches_the_selected_window() {
+    let backend = MockBackend::with_tables(1);
+    let store = ConfigStore::at(temp_config_path("locate-window"));
+    let handle = spawn_controller(Arc::new(backend.clone()), AppConfig::default(), store);
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 1);
+
+    handle
+        .commands
+        .send(ControllerCommand::Locate(WindowId(1)))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while backend.located.lock().unwrap().as_slice() != [WindowId(1)] && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    assert_eq!(backend.located.lock().unwrap().as_slice(), [WindowId(1)]);
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
 
 #[test]

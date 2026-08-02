@@ -199,6 +199,6 @@ pub trait WindowBackend: Send + Sync + 'static {
     fn monitors(&self) -> Result<Vec<MonitorInfo>, BackendError>;
     fn move_resize(&self, id: WindowId, rect: Rect) -> Result<Rect, BackendError>;
     fn minimum_size(&self, id: WindowId, aspect_ratio: f64) -> Result<Size, BackendError>;
-    fn highlight(&self, id: WindowId) -> Result<(), BackendError>;
+    fn locate(&self, id: WindowId) -> Result<(), BackendError>;
     fn foreground_window(&self) -> Option<WindowId>;
 }

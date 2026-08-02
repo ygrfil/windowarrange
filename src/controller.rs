@@ -42,7 +42,7 @@ pub enum ControllerCommand {
     Reorder { from: usize, to: usize },
     SelectMonitor(String),
     SetWindowMode { id: WindowId, mode: WindowMode },
-    Highlight(WindowId),
+    Locate(WindowId),
     SetHotkeys(HotkeySettings),
     Shutdown,
 }
@@ -247,9 +247,9 @@ impl Controller {
                 self.arrange();
             }
             ControllerCommand::SetWindowMode { id, mode } => self.set_window_mode(id, mode),
-            ControllerCommand::Highlight(id) => {
-                if let Err(error) = self.backend.highlight(id) {
-                    self.status_message = format!("Could not highlight candidate: {error}");
+            ControllerCommand::Locate(id) => {
+                if let Err(error) = self.backend.locate(id) {
+                    self.status_message = format!("Could not locate window: {error}");
                     self.publish();
                 }
             }
