@@ -39,14 +39,15 @@ use windows::{
             WindowsAndMessaging::{
                 EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE,
                 EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, EnumWindows, FLASHW_ALL,
-                FLASHW_TIMERNOFG, FLASHWINFO, FindWindowW, FlashWindowEx, GWL_EXSTYLE, GWL_STYLE,
-                GetClassNameW, GetForegroundWindow, GetMessageW, GetWindowLongPtrW, GetWindowRect,
-                GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-                IsWindowVisible, MINMAXINFO, MONITORINFOF_PRIMARY, MSG, OBJID_WINDOW,
-                SMTO_ABORTIFHUNG, SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
-                SWP_NOOWNERZORDER, SWP_NOZORDER, SendMessageTimeoutW, SetForegroundWindow,
-                SetWindowPos, ShowWindowAsync, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
-                WM_GETMINMAXINFO, WS_CHILD, WS_DISABLED, WS_EX_TOOLWINDOW,
+                FLASHW_TIMERNOFG, FLASHWINFO, FindWindowW, FlashWindowEx, GA_ROOT, GWL_EXSTYLE,
+                GWL_STYLE, GetAncestor, GetClassNameW, GetForegroundWindow, GetMessageW,
+                GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+                GetWindowThreadProcessId, IsIconic, IsWindowVisible, MINMAXINFO,
+                MONITORINFOF_PRIMARY, MSG, OBJID_WINDOW, SMTO_ABORTIFHUNG, SW_SHOWNOACTIVATE,
+                SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
+                SendMessageTimeoutW, SetForegroundWindow, SetWindowPos, ShowWindowAsync,
+                WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_GETMINMAXINFO, WS_CHILD,
+                WS_DISABLED, WS_EX_TOOLWINDOW,
             },
         },
     },
@@ -64,6 +65,7 @@ use crate::{
 
 static WINDOW_EVENT_SENDER: OnceLock<Sender<ControllerCommand>> = OnceLock::new();
 static WINDOW_EVENT_PENDING: AtomicBool = AtomicBool::new(false);
+const WINDOW_EVENT_STACK_BYTES: usize = 256 * 1024;
 
 pub fn apply_process_mitigations() -> Result<(), BackendError> {
     let mut policy = PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY::default();
@@ -294,9 +296,19 @@ pub fn spawn_window_event_watcher(sender: Sender<ControllerCommand>) {
     let _ = WINDOW_EVENT_SENDER.set(sender);
     thread::Builder::new()
         .name("clubgg-win-events".to_owned())
+        .stack_size(WINDOW_EVENT_STACK_BYTES)
         .spawn(move || unsafe {
-            let hook = SetWinEventHook(
+            let lifecycle_hook = SetWinEventHook(
                 EVENT_OBJECT_CREATE,
+                EVENT_OBJECT_HIDE,
+                None,
+                Some(window_event_callback),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            );
+            let location_hook = SetWinEventHook(
+                EVENT_OBJECT_LOCATIONCHANGE,
                 EVENT_OBJECT_LOCATIONCHANGE,
                 None,
                 Some(window_event_callback),
@@ -304,7 +316,7 @@ pub fn spawn_window_event_watcher(sender: Sender<ControllerCommand>) {
                 0,
                 WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
             );
-            if hook.0.is_null() {
+            if lifecycle_hook.0.is_null() && location_hook.0.is_null() {
                 return;
             }
             let mut message = MSG::default();
@@ -316,13 +328,18 @@ pub fn spawn_window_event_watcher(sender: Sender<ControllerCommand>) {
 unsafe extern "system" fn window_event_callback(
     _hook: HWINEVENTHOOK,
     event: u32,
-    _hwnd: HWND,
+    hwnd: HWND,
     object_id: i32,
     _child_id: i32,
     _event_thread: u32,
     _event_time: u32,
 ) {
     if object_id != OBJID_WINDOW.0 {
+        return;
+    }
+    if event == EVENT_OBJECT_LOCATIONCHANGE
+        && (hwnd.0.is_null() || unsafe { GetAncestor(hwnd, GA_ROOT) } != hwnd)
+    {
         return;
     }
     if matches!(
@@ -386,8 +403,9 @@ fn related_clubgg_processes(processes: &HashMap<u32, ProcessEntry>) -> HashSet<u
         .filter_map(|(id, entry)| {
             entry
                 .executable
-                .to_ascii_lowercase()
-                .contains("clubgg")
+                .as_bytes()
+                .windows(b"clubgg".len())
+                .any(|window| window.eq_ignore_ascii_case(b"clubgg"))
                 .then_some(*id)
         })
         .collect();

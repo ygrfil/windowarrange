@@ -11,7 +11,7 @@
 - `controller.rs` owns discovery reconciliation, ordering, enabled state, debounce, and arrangement.
 - `config.rs` owns versioned persistence.
 - `identity.rs` owns the neutral outer process and panel identity.
-- `logging.rs` owns bounded persistent file diagnostics.
+- `logging.rs` owns bounded persistent file diagnostics through the lightweight `log` facade; do not add a runtime subscriber or filtering framework without a measured need.
 - `hotkeys.rs` and `tray.rs` own their respective Windows integrations.
 - `app.rs` owns the eframe/egui panel.
 - `main.rs` owns startup, single-instance behavior, logging, and dependency wiring.
@@ -37,8 +37,9 @@
 - ClubGG tiles expose **Active**, **Park**, and **Ignore**. Ordinary application cards expose **Ignore**, **Fill space**, and **Top-right**.
 - Configuration schema version 6 persists table, parked, ignored, top-right, and free-space dispositions, table order, the default-on two-slot reservation, and the configurable ordinary-window default. Missing newer fields deserialize to safe defaults without rerunning the pre-v4 application-rule migration. Ordinary-window choices write an exact signature and a process/class fallback; exact matches take priority over the global default.
 - The single Arrange command reconciles immediately and then arranges regardless of Auto state. Turning Auto on also reconciles and arranges immediately. Native location events retain debounce and manual-movement protections.
-- Use native window events as the primary discovery trigger with a 200-millisecond trailing debounce and a ten-second fallback reconciliation. Explicit Arrange and enabling Auto remain immediate.
-- Use bounded background channels. The controller snapshot channel retains only the newest state, suppresses unchanged snapshots, and explicitly wakes egui when a new state is published; do not add a periodic UI repaint loop.
+- Use native window events as the primary discovery trigger with a 200-millisecond trailing debounce and a ten-second fallback reconciliation. Subscribe only to lifecycle and location ranges, and ignore child-window location events before queueing work. Explicit Arrange and enabling Auto remain immediate.
+- Use bounded background channels. The controller snapshot channel shares immutable snapshots, retains only the newest state, suppresses unchanged snapshots, and explicitly wakes egui when a new state is published; do not add a periodic UI repaint loop.
+- Keep the controller and native-event thread stacks explicitly bounded because their workloads are shallow and heap-backed.
 - Use eframe's Glow renderer for the compact panel unless measurements and compatibility testing justify a different backend.
 - Poker table-number clicks use a two-step selection: the first click selects, a second click on the same number cancels, and a click on another managed table number emits the typed `Reorder` command. The controller persists reordered signatures and immediately arranges; UI code never moves windows directly.
 - `layout.rs` evaluates a virtual count of four for 1–3 active tables and returns only the requested first row-major rectangles. Counts 4+ retain maximal-area grid selection. For counts above four, preserve the initial 2×2 slot order `(1,2)/(3,4)`, then extend right in vertical pairs `5/6` and `7/8`; non-two-row grids preserve the same initial 2×2 block before filling remaining cells deterministically.

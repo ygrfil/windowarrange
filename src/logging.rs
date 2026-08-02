@@ -1,40 +1,55 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Write},
+    io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-use tracing_subscriber::fmt::MakeWriter;
+use log::{LevelFilter, Log, Metadata, Record};
 
 const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 
-#[derive(Clone)]
-struct SharedFileWriter {
-    file: Arc<Mutex<File>>,
+struct FileLogger {
+    file: Mutex<Option<File>>,
 }
 
-impl Write for SharedFileWriter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.file
-            .lock()
-            .map_err(|_| io::Error::other("log file lock poisoned"))?
-            .write(buffer)
+static LOGGER: FileLogger = FileLogger {
+    file: Mutex::new(None),
+};
+
+impl Log for FileLogger {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        metadata.level() <= LevelFilter::Info
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        self.file
-            .lock()
-            .map_err(|_| io::Error::other("log file lock poisoned"))?
-            .flush()
+    fn log(&self, record: &Record<'_>) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let elapsed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        if let Ok(mut guard) = self.file.lock()
+            && let Some(file) = guard.as_mut()
+        {
+            let _ = writeln!(
+                file,
+                "{}.{:03} {:<5} {}",
+                elapsed.as_secs(),
+                elapsed.subsec_millis(),
+                record.level(),
+                record.args()
+            );
+        }
     }
-}
 
-impl<'writer> MakeWriter<'writer> for SharedFileWriter {
-    type Writer = Self;
-
-    fn make_writer(&'writer self) -> Self::Writer {
-        self.clone()
+    fn flush(&self) {
+        if let Ok(mut guard) = self.file.lock()
+            && let Some(file) = guard.as_mut()
+        {
+            let _ = file.flush();
+        }
     }
 }
 
@@ -53,17 +68,11 @@ pub fn initialize(log_path: &Path) -> Result<PathBuf, String> {
         .append(true)
         .open(log_path)
         .map_err(|error| error.to_string())?;
-    let writer = SharedFileWriter {
-        file: Arc::new(Mutex::new(file)),
-    };
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .with_ansi(false)
-        .with_writer(writer)
-        .try_init()
-        .map_err(|error| error.to_string())?;
+    *LOGGER
+        .file
+        .lock()
+        .map_err(|_| "log file lock poisoned".to_owned())? = Some(file);
+    log::set_logger(&LOGGER).map_err(|error| error.to_string())?;
+    log::set_max_level(LevelFilter::Info);
     Ok(log_path.to_path_buf())
 }

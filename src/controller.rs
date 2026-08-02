@@ -9,7 +9,7 @@ use std::{
 };
 
 use crossbeam_channel::{Receiver, Sender, bounded};
-use tracing::{info, warn};
+use log::{info, warn};
 
 use crate::{
     config::{AppConfig, ApplicationDefault, ConfigStore, HotkeySettings},
@@ -25,6 +25,7 @@ const DISCOVERY_DEBOUNCE: Duration = Duration::from_millis(200);
 const REFLOW_DEBOUNCE: Duration = Duration::from_millis(500);
 const COMMAND_QUEUE_CAPACITY: usize = 64;
 const SNAPSHOT_QUEUE_CAPACITY: usize = 1;
+const CONTROLLER_STACK_BYTES: usize = 512 * 1024;
 
 pub type UiWake = Arc<dyn Fn() + Send + Sync>;
 
@@ -48,7 +49,7 @@ pub enum ControllerCommand {
 
 pub struct ControllerHandle {
     pub commands: Sender<ControllerCommand>,
-    pub snapshots: Receiver<UiSnapshot>,
+    pub snapshots: Receiver<Arc<UiSnapshot>>,
 }
 
 #[must_use]
@@ -72,6 +73,7 @@ pub fn spawn_controller_with_waker(
     let stale_snapshot_rx = snapshot_rx.clone();
     thread::Builder::new()
         .name("clubgg-controller".to_owned())
+        .stack_size(CONTROLLER_STACK_BYTES)
         .spawn(move || {
             Controller::new(
                 backend,
@@ -94,10 +96,10 @@ struct Controller {
     backend: Arc<dyn WindowBackend>,
     config: AppConfig,
     store: ConfigStore,
-    snapshot_tx: Sender<UiSnapshot>,
-    stale_snapshot_rx: Receiver<UiSnapshot>,
+    snapshot_tx: Sender<Arc<UiSnapshot>>,
+    stale_snapshot_rx: Receiver<Arc<UiSnapshot>>,
     wake_ui: UiWake,
-    last_published: Option<UiSnapshot>,
+    last_published: Option<Arc<UiSnapshot>>,
     tables: Vec<ManagedTable>,
     candidates: Vec<WindowCandidate>,
     window_statuses: HashMap<WindowId, TableStatus>,
@@ -113,8 +115,8 @@ impl Controller {
         backend: Arc<dyn WindowBackend>,
         config: AppConfig,
         store: ConfigStore,
-        snapshot_tx: Sender<UiSnapshot>,
-        stale_snapshot_rx: Receiver<UiSnapshot>,
+        snapshot_tx: Sender<Arc<UiSnapshot>>,
+        stale_snapshot_rx: Receiver<Arc<UiSnapshot>>,
         wake_ui: UiWake,
     ) -> Self {
         Self {
@@ -469,11 +471,11 @@ impl Controller {
 
         if table_set_changed || positioned_set_changed || monitor_changed {
             info!(
-                candidates = self.candidates.len(),
-                managed_tables = self.tables.len(),
-                positioned_windows = self.positioned_window_ids().len(),
-                monitors = self.monitors.len(),
-                "discovery state changed"
+                "discovery state changed; candidates={}; managed_tables={}; positioned_windows={}; monitors={}",
+                self.candidates.len(),
+                self.tables.len(),
+                self.positioned_window_ids().len(),
+                self.monitors.len()
             );
             self.mark_dirty();
         }
@@ -547,10 +549,10 @@ impl Controller {
             .unwrap_or(DEFAULT_ASPECT_RATIO);
         let layout = calculate_layout(monitor.work_area, enabled_indices.len(), ratio);
         info!(
-            active_tables = enabled_indices.len(),
-            columns = layout.columns,
-            rows = layout.rows,
-            "arrangement started"
+            "arrangement started; active_tables={}; columns={}; rows={}",
+            enabled_indices.len(),
+            layout.columns,
+            layout.rows
         );
 
         let mut actual_sizes = Vec::new();
@@ -570,14 +572,14 @@ impl Controller {
                     self.tables[index].status = TableStatus::AccessDenied;
                     failed_count += 1;
                     access_denied_count += 1;
-                    warn!(slot = slot + 1, "table move was denied by Windows");
+                    warn!("table move was denied by Windows; slot={}", slot + 1);
                 }
                 Err(BackendError::WindowGone) => {
                     failed_count += 1;
-                    warn!(slot = slot + 1, "table closed before it could be moved");
+                    warn!("table closed before it could be moved; slot={}", slot + 1);
                 }
                 Err(BackendError::Other(message)) => {
-                    warn!(slot = slot + 1, error = %message, "table move failed");
+                    warn!("table move failed; slot={}; error={message}", slot + 1);
                     self.tables[index].status = TableStatus::MoveFailed(message);
                     failed_count += 1;
                 }
@@ -654,11 +656,11 @@ impl Controller {
             )
         };
         info!(
-            active_tables = enabled_indices.len(),
-            positioned_windows = positioned_requested,
-            moved = total_moved,
-            failed = failed_count,
-            "arrangement finished"
+            "arrangement finished; active_tables={}; positioned_windows={}; moved={}; failed={}",
+            enabled_indices.len(),
+            positioned_requested,
+            total_moved,
+            failed_count
         );
         self.publish();
     }
@@ -834,7 +836,7 @@ impl Controller {
 
     fn save_config(&mut self) {
         if let Err(error) = self.store.save(&self.config) {
-            warn!(%error, "could not save configuration");
+            warn!("could not save configuration: {error}");
             self.status_message = format!("Settings could not be saved: {error}");
         }
     }
@@ -896,12 +898,13 @@ impl Controller {
             status_message: self.status_message.clone(),
             hotkeys: self.config.hotkeys.clone(),
         };
-        if self.last_published.as_ref() == Some(&snapshot) {
+        if self.last_published.as_deref() == Some(&snapshot) {
             return;
         }
 
         while self.stale_snapshot_rx.try_recv().is_ok() {}
-        if self.snapshot_tx.try_send(snapshot.clone()).is_ok() {
+        let snapshot = Arc::new(snapshot);
+        if self.snapshot_tx.try_send(Arc::clone(&snapshot)).is_ok() {
             self.last_published = Some(snapshot);
             (self.wake_ui)();
         }

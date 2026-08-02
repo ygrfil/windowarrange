@@ -92,7 +92,7 @@ Default section order:
 ## Dependency Policy
 
 - Pin the stable Rust toolchain in `rust-toolchain.toml` with `rustfmt` and `clippy`.
-- The verified release baseline is Rust/Cargo `1.97.1` with `windows 0.62.2`, `eframe 0.35.0`, `tray-icon 0.24.2`, `global-hotkey 0.8.0`, `serde 1.0.229`, `serde_json 1.0.151`, `thiserror 2.0.19`, `tracing 0.1.44`, `tracing-subscriber 0.3.23`, `directories 6.0.0`, `crossbeam-channel 0.5.16`, and development dependency `proptest 1.11.0`.
+- The verified release baseline is Rust/Cargo `1.97.1` with `windows 0.62.2`, `eframe 0.35.0`, `tray-icon 0.24.2`, `global-hotkey 0.8.0`, `serde 1.0.229`, `serde_json 1.0.151`, `thiserror 2.0.19`, `log 0.4.33`, `crossbeam-channel 0.5.16`, and development dependency `proptest 1.11.0`.
 - Use current stable crates from crates.io only; do not use prereleases, wildcards, or unpinned Git dependencies.
 - Disable default features when practical and enable only required Windows functionality.
 - Commit `Cargo.lock` and treat it as the exact reproducible dependency graph.

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender, bounded};
 use eframe::egui;
-use tracing::{error, info, warn};
+use log::{error, info, warn};
 
 use crate::{
     config::{AppConfig, ApplicationDefault, ConfigStore, HotkeySettings},
@@ -30,13 +30,13 @@ pub fn run() {
     let log_path = store.log_path();
     let logging_result = logging::initialize(&log_path);
     std::panic::set_hook(Box::new(|panic| {
-        error!(%panic, "application panic");
+        error!("application panic: {panic}");
     }));
     match logging_result {
         Ok(path) => info!(
-            version = env!("CARGO_PKG_VERSION"),
-            log_file = %path.display(),
-            "Table Arranger Control started"
+            "Table Arranger Control started; version={}; log_file={}",
+            env!("CARGO_PKG_VERSION"),
+            path.display()
         ),
         Err(error) => {
             eprintln!("Could not initialize file logging: {error}");
@@ -44,7 +44,7 @@ pub fn run() {
     }
     match mitigation_result {
         Ok(()) => info!("legacy extension-point DLL loading is disabled"),
-        Err(error) => warn!(%error, "could not enable process extension-point mitigation"),
+        Err(error) => warn!("could not enable process extension-point mitigation: {error}"),
     }
 
     let _instance = match acquire_single_instance() {
@@ -54,7 +54,7 @@ pub fn run() {
             return;
         }
         Err(error) => {
-            error!(%error, "single-instance setup failed");
+            error!("single-instance setup failed: {error}");
             return;
         }
     };
@@ -62,7 +62,7 @@ pub fn run() {
     let config = match store.load() {
         Ok(config) => config,
         Err(error) => {
-            warn!(%error, "using default configuration");
+            warn!("using default configuration: {error}");
             AppConfig::default()
         }
     };
@@ -105,14 +105,14 @@ pub fn run() {
         }),
     );
     if let Err(error) = result {
-        error!(%error, "application exited with an error");
+        error!("application exited with an error: {error}");
     }
 }
 
 struct TableArrangerApp {
     commands: Sender<ControllerCommand>,
-    snapshots: Receiver<UiSnapshot>,
-    snapshot: UiSnapshot,
+    snapshots: Receiver<Arc<UiSnapshot>>,
+    snapshot: Arc<UiSnapshot>,
     hotkeys: Option<HotkeyService>,
     hotkey_events: Receiver<u32>,
     _tray: Option<TrayService>,
@@ -142,7 +142,7 @@ impl TableArrangerApp {
         let tray = match TrayService::new(creation.egui_ctx.clone(), tray_tx) {
             Ok(service) => Some(service),
             Err(error) => {
-                warn!(%error, "tray icon unavailable");
+                warn!("tray icon unavailable: {error}");
                 None
             }
         };
@@ -150,7 +150,7 @@ impl TableArrangerApp {
         Self {
             commands: controller.commands,
             snapshots: controller.snapshots,
-            snapshot: UiSnapshot::default(),
+            snapshot: Arc::new(UiSnapshot::default()),
             hotkeys,
             hotkey_events: hotkey_rx,
             _tray: tray,
@@ -1098,6 +1098,8 @@ fn configure_style(context: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crossbeam_channel::unbounded;
     use eframe::egui;
 
@@ -1159,7 +1161,7 @@ mod tests {
     #[test]
     fn workspace_content_stays_inside_a_compact_panel() {
         let (commands, _command_rx) = unbounded::<ControllerCommand>();
-        let (_snapshot_tx, snapshots) = unbounded::<UiSnapshot>();
+        let (_snapshot_tx, snapshots) = unbounded::<Arc<UiSnapshot>>();
         let (_hotkey_tx, hotkey_events) = unbounded::<u32>();
         let (_tray_tx, tray_events) = unbounded::<TrayAction>();
         let snapshot = UiSnapshot {
@@ -1191,7 +1193,7 @@ mod tests {
         let mut app = TableArrangerApp {
             commands,
             snapshots,
-            snapshot,
+            snapshot: Arc::new(snapshot),
             hotkeys: None,
             hotkey_events,
             _tray: None,
@@ -1309,13 +1311,13 @@ mod tests {
     #[test]
     fn top_bar_never_consumes_the_workspace_height() {
         let (commands, _command_rx) = unbounded::<ControllerCommand>();
-        let (_snapshot_tx, snapshots) = unbounded::<UiSnapshot>();
+        let (_snapshot_tx, snapshots) = unbounded::<Arc<UiSnapshot>>();
         let (_hotkey_tx, hotkey_events) = unbounded::<u32>();
         let (_tray_tx, tray_events) = unbounded::<TrayAction>();
         let mut app = TableArrangerApp {
             commands,
             snapshots,
-            snapshot: UiSnapshot::default(),
+            snapshot: Arc::new(UiSnapshot::default()),
             hotkeys: None,
             hotkey_events,
             _tray: None,

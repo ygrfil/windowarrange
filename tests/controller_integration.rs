@@ -738,9 +738,9 @@ fn candidate_mode(snapshot: &UiSnapshot, id: u64) -> WindowMode {
 }
 
 fn wait_for_snapshot(
-    receiver: &crossbeam_channel::Receiver<UiSnapshot>,
+    receiver: &crossbeam_channel::Receiver<Arc<UiSnapshot>>,
     predicate: impl Fn(&UiSnapshot) -> bool,
-) -> UiSnapshot {
+) -> Arc<UiSnapshot> {
     let deadline = Instant::now() + Duration::from_secs(4);
     while Instant::now() < deadline {
         if let Ok(snapshot) = receiver.recv_timeout(Duration::from_millis(100))

@@ -1,9 +1,8 @@
 use std::{
-    fs,
+    env, fs,
     path::{Path, PathBuf},
 };
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -144,8 +143,15 @@ pub struct ConfigStore {
 impl ConfigStore {
     #[must_use]
     pub fn for_current_user() -> Self {
-        let path = ProjectDirs::from("com", "ClubGGTools", "ClubGG Table Arranger")
-            .map(|dirs| dirs.config_dir().join("config.json"))
+        let path = env::var_os("APPDATA")
+            .filter(|root| !root.is_empty())
+            .map(PathBuf::from)
+            .map(|root| {
+                root.join("ClubGGTools")
+                    .join("ClubGG Table Arranger")
+                    .join("config")
+                    .join("config.json")
+            })
             .unwrap_or_else(|| PathBuf::from("clubgg-table-arranger.config.json"));
         Self { path }
     }
