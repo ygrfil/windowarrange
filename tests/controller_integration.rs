@@ -300,7 +300,7 @@ fn existing_ldplayer_assignment_reclaims_an_older_reserved_middle_column() {
         },
     ];
     let store = ConfigStore::at(temp_config_path("ldplayer-reclaims-middle-reservation"));
-    let handle = spawn_controller(Arc::new(backend), config, store.clone());
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store.clone());
     let snapshot = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 2);
 
     assert_eq!(
@@ -346,7 +346,7 @@ fn preserved_anonymous_columns_are_capped_at_two_total_columns() {
         PokerColumnAssignment::Empty,
     ];
     let store = ConfigStore::at(temp_config_path("two-column-preservation-cap"));
-    let handle = spawn_controller(Arc::new(backend), config, store.clone());
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store.clone());
     let snapshot = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 1);
 
     assert!(snapshot.preserve_table_slots);
@@ -859,7 +859,6 @@ fn multiple_lobbies_default_to_park_without_consuming_preserved_columns() {
                 .filter(|candidate| candidate.is_clubgg_lobby)
                 .all(|candidate| candidate.mode == WindowMode::Parked)
     });
-
     assert_eq!(snapshot.tables.len(), 1);
     assert!(snapshot.preserve_table_slots);
     assert_eq!(
@@ -886,6 +885,85 @@ fn multiple_lobbies_default_to_park_without_consuming_preserved_columns() {
     assert_eq!(last_rect(8), Some(Rect::new(2512, 924, 240, 180)));
     assert_eq!(last_rect(9), Some(Rect::new(2272, 924, 240, 180)));
     assert_eq!(last_rect(10), Some(Rect::new(2032, 924, 240, 180)));
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
+fn combined_lobby_mode_command_updates_every_lobby_once() {
+    let backend = MockBackend::with_tables(0);
+    for id in 8..=10 {
+        let mut lobby = candidate(id);
+        lobby.label = "ClubGG lobby".to_owned();
+        lobby.signature.title_pattern = format!("clubgg lobby {id}");
+        lobby.is_clubgg_lobby = true;
+        lobby.likely_table = false;
+        backend.candidates.lock().unwrap().push(lobby);
+    }
+    let store = ConfigStore::at(temp_config_path("combined-lobby-mode"));
+    let config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store.clone());
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot.candidates.len() == 3
+            && snapshot
+                .candidates
+                .iter()
+                .all(|candidate| candidate.mode == WindowMode::Parked)
+    });
+    for candidate in backend.candidates.lock().unwrap().iter_mut() {
+        candidate.rect = Rect::new(2512, 924, 240, 180);
+    }
+
+    handle
+        .commands
+        .send(ControllerCommand::SetClubGgLobbiesMode(WindowMode::Ignored))
+        .unwrap();
+    let ignored = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot.candidates.len() == 3
+            && snapshot
+                .candidates
+                .iter()
+                .all(|candidate| candidate.mode == WindowMode::Ignored)
+    });
+    assert!(ignored.tables.is_empty());
+    assert!(
+        ignored
+            .poker_slots
+            .iter()
+            .all(|slot| slot.occupant.is_none())
+    );
+    assert_eq!(
+        store
+            .load()
+            .unwrap()
+            .detection_rules
+            .iter()
+            .filter(|rule| {
+                rule.signature.title_pattern.starts_with("clubgg lobby ")
+                    && rule.disposition
+                        == clubgg_table_arranger::model::CandidateDisposition::Ignored
+            })
+            .count(),
+        3
+    );
+
+    backend.moves.lock().unwrap().clear();
+    handle
+        .commands
+        .send(ControllerCommand::LocateClubGgLobbies)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while backend.located.lock().unwrap().len() != 3 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        backend.located.lock().unwrap().as_slice(),
+        [WindowId(8), WindowId(9), WindowId(10)]
+    );
+    assert!(backend.moves.lock().unwrap().is_empty());
 
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }

@@ -42,12 +42,12 @@ use windows::{
                 FLASHW_TIMERNOFG, FLASHWINFO, FindWindowW, FlashWindowEx, GA_ROOT, GWL_EXSTYLE,
                 GWL_STYLE, GetAncestor, GetClassNameW, GetForegroundWindow, GetMessageW,
                 GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-                GetWindowThreadProcessId, IsIconic, IsWindowVisible, MINMAXINFO,
-                MONITORINFOF_PRIMARY, MSG, OBJID_WINDOW, SMTO_ABORTIFHUNG, SW_RESTORE,
-                SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
-                SWP_NOZORDER, SendMessageTimeoutW, SetForegroundWindow, SetWindowPos,
-                ShowWindowAsync, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_GETMINMAXINFO,
-                WS_CHILD, WS_DISABLED, WS_EX_TOOLWINDOW,
+                GetWindowThreadProcessId, HWND_TOP, IsIconic, IsWindowVisible, MINMAXINFO,
+                MONITORINFOF_PRIMARY, MSG, OBJID_WINDOW, SET_WINDOW_POS_FLAGS, SMTO_ABORTIFHUNG,
+                SW_RESTORE, SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageTimeoutW,
+                SetForegroundWindow, SetWindowPos, ShowWindowAsync, WINEVENT_OUTOFCONTEXT,
+                WINEVENT_SKIPOWNPROCESS, WM_GETMINMAXINFO, WS_CHILD, WS_DISABLED, WS_EX_TOOLWINDOW,
             },
         },
     },
@@ -232,29 +232,39 @@ impl WindowBackend for Win32Backend {
 
     fn locate(&self, id: WindowId) -> Result<(), BackendError> {
         let hwnd = hwnd_from_id(id);
-        unsafe {
-            if IsIconic(hwnd).as_bool() {
-                let _ = ShowWindowAsync(hwnd, SW_RESTORE);
-            }
-            BringWindowToTop(hwnd).map_err(map_windows_error)?;
-            if !SetForegroundWindow(hwnd).as_bool() {
-                let info = FLASHWINFO {
-                    cbSize: u32::try_from(size_of::<FLASHWINFO>()).unwrap_or(u32::MAX),
-                    hwnd,
-                    dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
-                    uCount: 3,
-                    dwTimeout: 0,
-                };
-                let _ = FlashWindowEx(&raw const info);
-            }
-        }
-        Ok(())
+        explicit_locate(hwnd)
     }
 
     fn foreground_window(&self) -> Option<WindowId> {
         let hwnd = unsafe { GetForegroundWindow() };
         (!hwnd.0.is_null()).then(|| id_from_hwnd(hwnd))
     }
+}
+
+fn locate_raise_flags() -> SET_WINDOW_POS_FLAGS {
+    // Do not use SWP_NOOWNERZORDER here. ClubGG lobbies are owned top-level surfaces,
+    // so their owner chain must be allowed to rise with an explicit Locate request.
+    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+}
+
+fn explicit_locate(hwnd: HWND) -> Result<(), BackendError> {
+    unsafe {
+        let _ = ShowWindowAsync(hwnd, SW_RESTORE);
+        SetWindowPos(hwnd, Some(HWND_TOP), 0, 0, 0, 0, locate_raise_flags())
+            .map_err(map_windows_error)?;
+        BringWindowToTop(hwnd).map_err(map_windows_error)?;
+        if !SetForegroundWindow(hwnd).as_bool() {
+            let info = FLASHWINFO {
+                cbSize: u32::try_from(size_of::<FLASHWINFO>()).unwrap_or(u32::MAX),
+                hwnd,
+                dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
+                uCount: 3,
+                dwTimeout: 0,
+            };
+            let _ = FlashWindowEx(&raw const info);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -666,7 +676,10 @@ fn map_last_error(context: &str) -> BackendError {
 mod tests {
     use super::{
         is_clubgg_lobby_surface, is_generic_clubgg_surface, is_ldplayer_process,
-        is_system_shell_window, normalize_title_pattern,
+        is_system_shell_window, locate_raise_flags, normalize_title_pattern,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_SHOWWINDOW,
     };
 
     #[test]
@@ -704,5 +717,13 @@ mod tests {
         assert!(is_clubgg_lobby_surface("ClubGG lobby"));
         assert!(is_clubgg_lobby_surface("Tournament Lobby - ClubGG"));
         assert!(!is_clubgg_lobby_surface("PLO5 10-20 - Table 2"));
+    }
+
+    #[test]
+    fn locate_raise_allows_owned_lobby_z_order_to_change() {
+        let flags = locate_raise_flags();
+        assert_ne!(flags.0 & SWP_SHOWWINDOW.0, 0);
+        assert_eq!(flags.0 & SWP_NOOWNERZORDER.0, 0);
+        assert_eq!(flags.0 & SWP_NOACTIVATE.0, 0);
     }
 }

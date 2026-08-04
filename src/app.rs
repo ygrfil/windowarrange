@@ -368,6 +368,13 @@ impl TableArrangerApp {
     }
 
     fn poker_board(&mut self, ui: &mut egui::Ui) {
+        let lobbies: Vec<_> = self
+            .snapshot
+            .candidates
+            .iter()
+            .filter(|window| window.is_clubgg_lobby)
+            .cloned()
+            .collect();
         let windows: Vec<_> = self
             .snapshot
             .candidates
@@ -448,6 +455,11 @@ impl TableArrangerApp {
             }
         }
 
+        if !lobbies.is_empty() {
+            ui.add_space(3.0);
+            self.clubgg_lobby_summary(ui, &lobbies);
+        }
+
         let ignored: Vec<_> = windows
             .iter()
             .filter(|window| window.mode == WindowMode::Ignored)
@@ -460,57 +472,38 @@ impl TableArrangerApp {
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     for window in row {
-                        let selected = self.selected_table == Some(window.id);
                         ui.allocate_ui_with_layout(
                             egui::vec2(chip_width, 16.0),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
-                                egui::Frame::new()
+                                let mut control_rects = Vec::new();
+                                let card = egui::Frame::new()
                                     .fill(ui.visuals().faint_bg_color)
                                     .corner_radius(4)
                                     .inner_margin(egui::Margin::same(1))
                                     .show(ui, |ui| {
                                         ui.horizontal(|ui| {
-                                            if ui
-                                                .selectable_label(
-                                                    selected,
-                                                    format!(
-                                                        "{} {}",
-                                                        window.slot.map_or_else(
-                                                            || "—".to_owned(),
-                                                            |slot| slot.to_string()
-                                                        ),
-                                                        short_label(&window.label, 8)
-                                                    ),
-                                                )
-                                                .on_hover_text(&window.label)
-                                                .clicked()
-                                            {
-                                                self.selected_table =
-                                                    if selected { None } else { Some(window.id) };
-                                            }
+                                            ui.add(
+                                                egui::Label::new(short_label(&window.label, 11))
+                                                    .truncate(),
+                                            )
+                                            .on_hover_text(&window.label);
                                             for (icon, mode, color, tooltip) in [
                                                 (
-                                                    ActionIcon::Locate,
-                                                    None,
-                                                    ACCENT,
-                                                    "Locate this window",
-                                                ),
-                                                (
                                                     ActionIcon::Arrange,
-                                                    Some(WindowMode::Arranged),
+                                                    WindowMode::Arranged,
                                                     ACCENT,
                                                     "Arrange this table",
                                                 ),
                                                 (
                                                     ActionIcon::Park,
-                                                    Some(WindowMode::Parked),
+                                                    WindowMode::Parked,
                                                     PARKED,
                                                     "Park this table",
                                                 ),
                                                 (
                                                     ActionIcon::Ignore,
-                                                    Some(WindowMode::Ignored),
+                                                    WindowMode::Ignored,
                                                     egui::Color32::GRAY,
                                                     "Ignore this table",
                                                 ),
@@ -519,27 +512,46 @@ impl TableArrangerApp {
                                                     egui::vec2(12.0, 12.0),
                                                     egui::Sense::hover(),
                                                 );
+                                                control_rects.push(rect);
                                                 if icon_button(
                                                     ui,
                                                     rect,
                                                     icon,
-                                                    mode == Some(window.mode),
+                                                    mode == window.mode,
                                                     color,
                                                     tooltip,
                                                 )
                                                 .clicked()
                                                 {
-                                                    if let Some(mode) = mode {
-                                                        self.set_window_mode(window, mode);
-                                                    } else {
-                                                        self.send(ControllerCommand::Locate(
-                                                            window.id,
-                                                        ));
-                                                    }
+                                                    self.set_window_mode(window, mode);
                                                 }
                                             }
                                         });
-                                    });
+                                    })
+                                    .response;
+                                let locate_clicked =
+                                    clickable_body_rects(card.rect, &control_rects)
+                                        .into_iter()
+                                        .enumerate()
+                                        .any(|(index, rect)| {
+                                            ui.interact(
+                                                rect,
+                                                ui.make_persistent_id((
+                                                    "ignored-poker-body",
+                                                    window.id.0,
+                                                    index,
+                                                )),
+                                                egui::Sense::click(),
+                                            )
+                                            .on_hover_text(format!(
+                                                "{}\nLeft click: Locate",
+                                                window.label
+                                            ))
+                                            .clicked()
+                                        });
+                                if locate_clicked {
+                                    self.send(ControllerCommand::Locate(window.id));
+                                }
                             },
                         );
                     }
@@ -558,6 +570,86 @@ impl TableArrangerApp {
         }
     }
 
+    fn clubgg_lobby_summary(&self, ui: &mut egui::Ui, lobbies: &[CandidateView]) {
+        let card_width = ui.available_width();
+        let card_fill = if ui.visuals().dark_mode {
+            egui::Color32::from_gray(27)
+        } else {
+            egui::Color32::from_gray(248)
+        };
+        let common_mode = lobbies
+            .first()
+            .map(|lobby| lobby.mode)
+            .filter(|mode| lobbies.iter().all(|lobby| lobby.mode == *mode));
+        let mut locate_clicked = false;
+        egui::Frame::new()
+            .fill(card_fill)
+            .stroke(egui::Stroke::new(
+                1.0,
+                ui.visuals().widgets.noninteractive.bg_stroke.color,
+            ))
+            .corner_radius(6)
+            .inner_margin(egui::Margin::same(4))
+            .show(ui, |ui| {
+                ui.set_min_width((card_width - 8.0).max(1.0));
+                ui.set_min_height(APPLICATION_TILE_HEIGHT - 8.0);
+                ui.horizontal(|ui| {
+                    let text_width = (ui.available_width() - 54.0).max(40.0);
+                    locate_clicked = ui
+                        .add_sized(
+                            [text_width, 34.0],
+                            egui::Button::new(format!(
+                                "{}\nLocate one by one",
+                                lobby_summary_label(lobbies.len())
+                            ))
+                            .frame(false),
+                        )
+                        .on_hover_text("Raise each ClubGG lobby without moving its parked position")
+                        .clicked();
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        for (icon, mode, color, tooltip) in [
+                            (
+                                ActionIcon::TopRight,
+                                WindowMode::TopRight,
+                                TOP_RIGHT,
+                                "Put all ClubGG lobbies at the display's top-right",
+                            ),
+                            (
+                                ActionIcon::Ignore,
+                                WindowMode::Ignored,
+                                egui::Color32::GRAY,
+                                "Ignore all ClubGG lobbies",
+                            ),
+                            (
+                                ActionIcon::Park,
+                                WindowMode::Parked,
+                                PARKED,
+                                "Park all ClubGG lobbies shoulder-to-shoulder",
+                            ),
+                        ] {
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                            if icon_button(
+                                ui,
+                                rect,
+                                icon,
+                                common_mode == Some(mode),
+                                color,
+                                tooltip,
+                            )
+                            .clicked()
+                            {
+                                self.send(ControllerCommand::SetClubGgLobbiesMode(mode));
+                            }
+                        }
+                    });
+                });
+            });
+        if locate_clicked {
+            self.send(ControllerCommand::LocateClubGgLobbies);
+        }
+    }
+
     fn mirrored_slot(
         &mut self,
         ui: &mut egui::Ui,
@@ -568,12 +660,12 @@ impl TableArrangerApp {
         let occupant = slot
             .occupant
             .and_then(|id| windows.iter().find(|window| window.id == id));
-        let response = ui.interact(
-            rect,
-            ui.make_persistent_id(("poker-slot", slot.id.column, slot.id.row)),
-            egui::Sense::click(),
-        );
         let Some(window) = occupant else {
+            let response = ui.interact(
+                rect,
+                ui.make_persistent_id(("poker-slot", slot.id.column, slot.id.row)),
+                egui::Sense::click(),
+            );
             dashed_rect(
                 ui.painter(),
                 rect.shrink(1.0),
@@ -629,6 +721,14 @@ impl TableArrangerApp {
 
         let badge_rect =
             egui::Rect::from_min_size(rect.min + egui::vec2(3.0, 3.0), egui::vec2(16.0, 16.0));
+        let badge_hit_rect = badge_rect.expand(3.0).intersect(rect);
+        let badge_response = ui
+            .interact(
+                badge_hit_rect,
+                ui.make_persistent_id(("table-number", window.id.0)),
+                egui::Sense::click(),
+            )
+            .on_hover_text("Select this table number for swapping");
         ui.painter()
             .rect_filled(badge_rect, 3.0, if slot.parked { PARKED } else { ACCENT });
         ui.painter().text(
@@ -650,32 +750,29 @@ impl TableArrangerApp {
             ui.visuals().text_color(),
         );
 
-        let icon_size = ((rect.width() - 7.0) / 4.0).clamp(9.0, 16.0);
+        let icon_size = ((rect.width() - 6.0) / 3.0).clamp(9.0, 16.0);
         let gap = 1.0;
-        let total = icon_size * 4.0 + gap * 3.0;
-        let mut action_clicked = false;
+        let total = icon_size * 3.0 + gap * 2.0;
+        let action_top = rect.bottom() - icon_size - 2.0;
+        let mut control_rects = vec![badge_hit_rect];
         if rect.width() >= total + 4.0 && rect.height() >= icon_size * 2.0 + 5.0 {
-            let start = egui::pos2(
-                rect.center().x - total / 2.0,
-                rect.bottom() - icon_size - 2.0,
-            );
+            let start = egui::pos2(rect.center().x - total / 2.0, action_top);
             for (index, (icon, mode, color, tooltip)) in [
-                (ActionIcon::Locate, None, ACCENT, "Locate this window"),
                 (
                     ActionIcon::Arrange,
-                    Some(WindowMode::Arranged),
+                    WindowMode::Arranged,
                     ACCENT,
                     "Arrange in this slot",
                 ),
                 (
                     ActionIcon::Park,
-                    Some(WindowMode::Parked),
+                    WindowMode::Parked,
                     PARKED,
                     "Park at bottom-right",
                 ),
                 (
                     ActionIcon::Ignore,
-                    Some(WindowMode::Ignored),
+                    WindowMode::Ignored,
                     egui::Color32::GRAY,
                     "Ignore this window",
                 ),
@@ -687,35 +784,42 @@ impl TableArrangerApp {
                     start + egui::vec2(index as f32 * (icon_size + gap), 0.0),
                     egui::vec2(icon_size, icon_size),
                 );
-                let selected = mode == Some(window.mode);
+                control_rects.push(icon_rect);
+                let selected = mode == window.mode;
                 if icon_button(ui, icon_rect, icon, selected, color, tooltip).clicked() {
-                    action_clicked = true;
-                    if let Some(mode) = mode {
-                        self.set_window_mode(window, mode);
-                    } else {
-                        self.send(ControllerCommand::Locate(window.id));
-                    }
+                    self.set_window_mode(window, mode);
                 }
             }
         }
 
-        if response.on_hover_text(window_subtitle(window)).clicked()
-            && !action_clicked
-            && let Some(command) =
+        let body_clicked = clickable_body_rects(rect, &control_rects)
+            .into_iter()
+            .enumerate()
+            .filter(|(_, body_rect)| body_rect.is_positive())
+            .any(|(index, body_rect)| {
+                ui.interact(
+                    body_rect,
+                    ui.make_persistent_id(("table-body", window.id.0, index)),
+                    egui::Sense::click(),
+                )
+                .on_hover_text(format!(
+                    "{}\nLeft click: Locate\nClick the number badge to select for swapping",
+                    window_subtitle(window)
+                ))
+                .clicked()
+            });
+        if badge_response.clicked() {
+            if let Some(command) =
                 slot_click_command(&mut self.selected_table, Some(window.id), slot.id)
-        {
-            self.send(command);
+            {
+                self.send(command);
+            }
+        } else if body_clicked {
+            self.send(ControllerCommand::Locate(window.id));
         }
     }
 
     fn application_board(&mut self, ui: &mut egui::Ui) {
-        let mut lobbies: Vec<_> = self
-            .snapshot
-            .candidates
-            .iter()
-            .filter(|window| window.is_clubgg_lobby)
-            .cloned()
-            .collect();
         let mut applications: Vec<_> = self
             .snapshot
             .candidates
@@ -723,10 +827,9 @@ impl TableArrangerApp {
             .filter(|window| window.poker_client.is_none())
             .cloned()
             .collect();
-        lobbies.sort_by_key(|window| window_mode_rank(window.mode));
         applications.sort_by_key(|window| window_mode_rank(window.mode));
 
-        if lobbies.is_empty() && applications.is_empty() {
+        if applications.is_empty() {
             empty_section(
                 ui,
                 "No other windows",
@@ -735,25 +838,6 @@ impl TableArrangerApp {
             return;
         }
 
-        if !lobbies.is_empty() {
-            ui.label(
-                egui::RichText::new("ClubGG lobbies")
-                    .small()
-                    .strong()
-                    .color(ui.visuals().weak_text_color()),
-            );
-            self.application_grid(ui, &lobbies);
-        }
-        if !lobbies.is_empty() && !applications.is_empty() {
-            ui.add_space(2.0);
-            ui.separator();
-            ui.label(
-                egui::RichText::new("Other windows")
-                    .small()
-                    .strong()
-                    .color(ui.visuals().weak_text_color()),
-            );
-        }
         self.application_grid(ui, &applications);
     }
 
@@ -790,14 +874,15 @@ impl TableArrangerApp {
         let card_stroke =
             egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
 
-        egui::Frame::new()
+        let mut control_rects = Vec::new();
+        let frame = egui::Frame::new()
             .fill(card_fill)
             .stroke(card_stroke)
             .corner_radius(6)
             .inner_margin(egui::Margin::same(4))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let text_width = (ui.available_width() - 68.0).max(24.0);
+                    let text_width = (ui.available_width() - 52.0).max(24.0);
                     ui.allocate_ui_with_layout(
                         egui::vec2(text_width, 34.0),
                         egui::Layout::top_down(egui::Align::Min),
@@ -814,95 +899,65 @@ impl TableArrangerApp {
                             );
                         },
                     );
-                    if window.is_clubgg_lobby {
-                        self.lobby_window_controls(ui, window);
-                    } else {
-                        self.application_window_controls(ui, window);
-                    }
+                    control_rects = self.application_window_controls(ui, window);
                 });
             })
-            .response
+            .response;
+        let locate_clicked = clickable_body_rects(frame.rect, &control_rects)
+            .into_iter()
+            .enumerate()
+            .any(|(index, rect)| {
+                ui.interact(
+                    rect,
+                    ui.make_persistent_id(("application-body", window.id.0, index)),
+                    egui::Sense::click(),
+                )
+                .on_hover_text(format!("{}\nLeft click: Locate", window.label))
+                .clicked()
+            });
+        if locate_clicked {
+            self.send(ControllerCommand::Locate(window.id));
+        }
+        frame
     }
 
-    fn application_window_controls(&self, ui: &mut egui::Ui, window: &CandidateView) {
+    fn application_window_controls(
+        &self,
+        ui: &mut egui::Ui,
+        window: &CandidateView,
+    ) -> Vec<egui::Rect> {
+        let mut control_rects = Vec::new();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (icon, mode, color, tooltip) in [
                 (
-                    ActionIcon::Locate,
-                    None,
-                    ACCENT,
-                    "Locate this application window",
-                ),
-                (
                     ActionIcon::Ignore,
-                    Some(WindowMode::Ignored),
+                    WindowMode::Ignored,
                     egui::Color32::GRAY,
                     "Ignore: leave this application window untouched",
                 ),
                 (
                     ActionIcon::FillSpace,
-                    Some(WindowMode::FreeSpace),
+                    WindowMode::FreeSpace,
                     FREE_SPACE,
                     "Fill space: use only the vertical strip right of poker tables",
                 ),
                 (
                     ActionIcon::TopRight,
-                    Some(WindowMode::TopRight),
+                    WindowMode::TopRight,
                     TOP_RIGHT,
                     "Top-right: keep its size and anchor it at the display's top-right",
                 ),
             ] {
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                if icon_button(ui, rect, icon, mode == Some(window.mode), color, tooltip).clicked()
-                {
-                    if let Some(mode) = mode {
-                        self.set_window_mode(window, mode);
-                    } else {
-                        self.send(ControllerCommand::Locate(window.id));
-                    }
+                control_rects.push(rect);
+                if icon_button(ui, rect, icon, mode == window.mode, color, tooltip).clicked() {
+                    self.set_window_mode(window, mode);
                 }
             }
         });
-    }
-
-    fn lobby_window_controls(&self, ui: &mut egui::Ui, window: &CandidateView) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            for (icon, mode, color, tooltip) in [
-                (ActionIcon::Locate, None, ACCENT, "Locate this ClubGG lobby"),
-                (
-                    ActionIcon::Park,
-                    Some(WindowMode::Parked),
-                    PARKED,
-                    "Park this lobby at the bottom-right",
-                ),
-                (
-                    ActionIcon::Ignore,
-                    Some(WindowMode::Ignored),
-                    egui::Color32::GRAY,
-                    "Ignore: leave this lobby untouched",
-                ),
-                (
-                    ActionIcon::TopRight,
-                    Some(WindowMode::TopRight),
-                    TOP_RIGHT,
-                    "Top-right: keep its size and anchor it at the display's top-right",
-                ),
-            ] {
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                if icon_button(ui, rect, icon, mode == Some(window.mode), color, tooltip).clicked()
-                {
-                    if let Some(mode) = mode {
-                        self.set_window_mode(window, mode);
-                    } else {
-                        self.send(ControllerCommand::Locate(window.id));
-                    }
-                }
-            }
-        });
+        control_rects
     }
 
     fn set_window_mode(&self, window: &CandidateView, mode: WindowMode) {
@@ -1099,7 +1154,6 @@ fn settings_controls(
     }
     ui.horizontal_wrapped(|ui| {
         for (icon, label) in [
-            (ActionIcon::Locate, "Locate"),
             (ActionIcon::Arrange, "Active"),
             (ActionIcon::Park, "Park"),
             (ActionIcon::Ignore, "Ignore"),
@@ -1110,6 +1164,7 @@ fn settings_controls(
             let _ = icon_button(ui, rect, icon, false, ACCENT, label);
             ui.label(egui::RichText::new(label).small());
         }
+        ui.label(egui::RichText::new("Left click card = Locate").small());
     });
 
     ui.label("Default for new non-poker windows");
@@ -1226,26 +1281,19 @@ fn desired_panel_height(snapshot: &UiSnapshot) -> f32 {
             let aspect = work.width.max(1) as f32 / work.height.max(1) as f32;
             (MIRROR_MAX_PANE_WIDTH / aspect).max(MIRROR_MIN_HEIGHT)
         });
-        mirror_height + ignored_poker.div_ceil(2) as f32 * 18.0
+        mirror_height
+            + ignored_poker.div_ceil(2) as f32 * 18.0
+            + if lobbies > 0 {
+                APPLICATION_TILE_HEIGHT + 3.0
+            } else {
+                0.0
+            }
     } else {
         MINIMUM_BOARD_HEIGHT
     };
-    let lobby_rows = lobbies.div_ceil(2);
     let application_rows = applications.div_ceil(2);
-    let lobby_height = if lobby_rows == 0 {
-        0.0
-    } else {
-        16.0 + lobby_rows as f32 * APPLICATION_TILE_HEIGHT
-            + lobby_rows.saturating_sub(1) as f32 * CARD_ROW_GAP
-    };
-    let other_height = application_rows as f32 * APPLICATION_TILE_HEIGHT
+    let application_height = application_rows as f32 * APPLICATION_TILE_HEIGHT
         + application_rows.saturating_sub(1) as f32 * CARD_ROW_GAP;
-    let group_gap = if lobbies > 0 && applications > 0 {
-        22.0
-    } else {
-        0.0
-    };
-    let application_height = lobby_height + group_gap + other_height;
     let cards_height = poker_height
         .max(application_height)
         .max(MINIMUM_BOARD_HEIGHT);
@@ -1255,7 +1303,6 @@ fn desired_panel_height(snapshot: &UiSnapshot) -> f32 {
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 enum ActionIcon {
-    Locate,
     Arrange,
     Park,
     Ignore,
@@ -1284,6 +1331,38 @@ fn project_rect(source: Rect, work_area: Rect, target: egui::Rect) -> egui::Rect
         ),
     )
     .intersect(target)
+}
+
+fn clickable_body_rects(tile: egui::Rect, controls: &[egui::Rect]) -> Vec<egui::Rect> {
+    let mut regions = vec![tile];
+    for control in controls {
+        let mut next = Vec::new();
+        for region in regions {
+            let overlap = region.intersect(*control);
+            if !overlap.is_positive() {
+                next.push(region);
+                continue;
+            }
+            for remainder in [
+                egui::Rect::from_min_max(region.min, egui::pos2(region.right(), overlap.top())),
+                egui::Rect::from_min_max(egui::pos2(region.left(), overlap.bottom()), region.max),
+                egui::Rect::from_min_max(
+                    egui::pos2(region.left(), overlap.top()),
+                    egui::pos2(overlap.left(), overlap.bottom()),
+                ),
+                egui::Rect::from_min_max(
+                    egui::pos2(overlap.right(), overlap.top()),
+                    egui::pos2(region.right(), overlap.bottom()),
+                ),
+            ] {
+                if remainder.is_positive() {
+                    next.push(remainder);
+                }
+            }
+        }
+        regions = next;
+    }
+    regions
 }
 
 fn dashed_rect(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
@@ -1350,23 +1429,6 @@ fn icon_button(
     let center = rect.center();
     let radius = rect.width().min(rect.height()) * 0.24;
     match icon {
-        ActionIcon::Locate => {
-            ui.painter().circle_stroke(center, radius, stroke);
-            ui.painter().line_segment(
-                [
-                    egui::pos2(center.x, rect.top() + 2.0),
-                    egui::pos2(center.x, center.y - radius),
-                ],
-                stroke,
-            );
-            ui.painter().line_segment(
-                [
-                    egui::pos2(rect.left() + 2.0, center.y),
-                    egui::pos2(center.x - radius, center.y),
-                ],
-                stroke,
-            );
-        }
         ActionIcon::Arrange => {
             let size = radius * 0.72;
             for offset in [
@@ -1469,6 +1531,14 @@ fn short_label(label: &str, max_chars: usize) -> String {
         format!("{short}…")
     } else {
         short
+    }
+}
+
+fn lobby_summary_label(count: usize) -> String {
+    if count == 1 {
+        "ClubGG lobby ×1".to_owned()
+    } else {
+        format!("ClubGG lobbies ×{count}")
     }
 }
 
@@ -1602,7 +1672,8 @@ mod tests {
 
     use super::{
         APPLICATION_TILE_HEIGHT, SETTINGS_MAX_HEIGHT, SettingsViewportState, TableArrangerApp,
-        settings_controls, slot_click_command, window_mode_rank,
+        clickable_body_rects, lobby_summary_label, settings_controls, slot_click_command,
+        window_mode_rank,
     };
     use crate::{
         config::HotkeySettings,
@@ -1649,6 +1720,59 @@ mod tests {
             }) if received == destination
         ));
         assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn selected_table_clicking_another_number_emits_a_swap_command() {
+        let mut selected = Some(WindowId(1));
+        let destination = PokerSlotId::club(0, 1);
+
+        let command = slot_click_command(&mut selected, Some(WindowId(2)), destination);
+        assert!(matches!(
+            command,
+            Some(ControllerCommand::MoveToSlot {
+                source: WindowId(1),
+                destination: received,
+            }) if received == destination
+        ));
+        assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn table_body_hit_regions_do_not_cover_number_or_action_controls() {
+        let tile = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(120.0, 80.0));
+        let badge = egui::Rect::from_min_size(egui::pos2(3.0, 3.0), egui::vec2(16.0, 16.0));
+        let actions = [
+            egui::Rect::from_min_size(egui::pos2(34.0, 62.0), egui::vec2(16.0, 16.0)),
+            egui::Rect::from_min_size(egui::pos2(52.0, 62.0), egui::vec2(16.0, 16.0)),
+            egui::Rect::from_min_size(egui::pos2(70.0, 62.0), egui::vec2(16.0, 16.0)),
+        ];
+        let controls = [badge, actions[0], actions[1], actions[2]];
+        let regions = clickable_body_rects(tile, &controls);
+
+        for point in [
+            egui::pos2(60.0, 30.0),
+            egui::pos2(1.0, 79.0),
+            egui::pos2(60.0, 79.0),
+        ] {
+            assert!(regions.iter().any(|region| region.contains(point)));
+        }
+        for control in controls {
+            assert!(
+                !regions
+                    .iter()
+                    .any(|region| region.contains(control.center()))
+            );
+        }
+        let clickable_area: f32 = regions.iter().map(egui::Rect::area).sum();
+        let control_area: f32 = controls.iter().map(egui::Rect::area).sum();
+        assert!((clickable_area + control_area - tile.area()).abs() < 0.01);
+    }
+
+    #[test]
+    fn combined_lobby_label_reports_the_detected_count() {
+        assert_eq!(lobby_summary_label(1), "ClubGG lobby ×1");
+        assert_eq!(lobby_summary_label(3), "ClubGG lobbies ×3");
     }
 
     #[test]

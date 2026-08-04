@@ -27,6 +27,7 @@ use crate::{
 const FALLBACK_RECONCILE_INTERVAL: Duration = Duration::from_secs(10);
 const DISCOVERY_DEBOUNCE: Duration = Duration::from_millis(200);
 const REFLOW_DEBOUNCE: Duration = Duration::from_millis(500);
+const LOBBY_LOCATE_GAP: Duration = Duration::from_millis(80);
 const COMMAND_QUEUE_CAPACITY: usize = 64;
 const SNAPSHOT_QUEUE_CAPACITY: usize = 1;
 const CONTROLLER_STACK_BYTES: usize = 512 * 1024;
@@ -55,6 +56,8 @@ pub enum ControllerCommand {
         id: WindowId,
         mode: WindowMode,
     },
+    SetClubGgLobbiesMode(WindowMode),
+    LocateClubGgLobbies,
     Locate(WindowId),
     SetHotkeys(HotkeySettings),
     Shutdown,
@@ -262,6 +265,10 @@ impl Controller {
                 self.arrange();
             }
             ControllerCommand::SetWindowMode { id, mode } => self.set_window_mode(id, mode),
+            ControllerCommand::SetClubGgLobbiesMode(mode) => {
+                self.set_clubgg_lobbies_mode(mode);
+            }
+            ControllerCommand::LocateClubGgLobbies => self.locate_clubgg_lobbies(),
             ControllerCommand::Locate(id) => {
                 if let Err(error) = self.backend.locate(id) {
                     self.status_message = format!("Could not locate window: {error}");
@@ -341,6 +348,68 @@ impl Controller {
             }
         }
         self.arrange();
+    }
+
+    fn set_clubgg_lobbies_mode(&mut self, mode: WindowMode) {
+        let disposition = match mode {
+            WindowMode::Parked => CandidateDisposition::Parked,
+            WindowMode::TopRight => CandidateDisposition::TopRight,
+            WindowMode::Ignored => CandidateDisposition::Ignored,
+            WindowMode::Arranged | WindowMode::FreeSpace => return,
+        };
+        let signatures: HashSet<_> = self
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.is_clubgg_lobby)
+            .map(|candidate| candidate.signature.clone())
+            .collect();
+        if signatures.is_empty() {
+            return;
+        }
+        for signature in signatures {
+            self.config.set_disposition(signature, disposition);
+        }
+        self.save_config();
+        self.reconcile();
+        self.arrange();
+    }
+
+    fn locate_clubgg_lobbies(&mut self) {
+        let lobbies: Vec<_> = self
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.is_clubgg_lobby)
+            .map(|candidate| candidate.id)
+            .collect();
+        let mut failed = 0_usize;
+        for (index, id) in lobbies.iter().enumerate() {
+            let mut lobby_failed = false;
+            if let Err(error) = self.backend.locate(*id) {
+                self.window_statuses
+                    .insert(*id, TableStatus::MoveFailed(error.to_string()));
+                lobby_failed = true;
+            } else if !lobby_failed {
+                self.window_statuses.insert(*id, TableStatus::Ready);
+            }
+            failed += usize::from(lobby_failed);
+            if index + 1 < lobbies.len() {
+                thread::sleep(LOBBY_LOCATE_GAP);
+            }
+        }
+        self.status_message = if failed == 0 {
+            format!(
+                "Located {} ClubGG lobb{}.",
+                lobbies.len(),
+                if lobbies.len() == 1 { "y" } else { "ies" }
+            )
+        } else {
+            format!(
+                "Located {} of {} ClubGG lobbies.",
+                lobbies.len().saturating_sub(failed),
+                lobbies.len()
+            )
+        };
+        self.publish();
     }
 
     fn reconcile(&mut self) {
