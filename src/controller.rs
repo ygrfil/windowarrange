@@ -288,6 +288,9 @@ impl Controller {
         let Some(index) = self.tables.iter().position(|table| table.id == id) else {
             return;
         };
+        if !enabled {
+            self.release_slot_for(id);
+        }
         self.tables[index].enabled = enabled;
         let disposition = if enabled {
             CandidateDisposition::Table
@@ -296,10 +299,13 @@ impl Controller {
         };
         self.config
             .set_disposition(self.tables[index].signature.clone(), disposition);
-        self.save_config();
         if enabled {
             self.tables[index].status = TableStatus::Ready;
+            self.sync_poker_columns();
+        } else {
+            self.compact_active_poker_columns();
         }
+        self.save_config();
         self.arrange();
     }
 
@@ -328,11 +334,10 @@ impl Controller {
             self.config
                 .set_application_disposition(signature, disposition);
         }
-        if mode == WindowMode::Ignored {
+        if matches!(mode, WindowMode::Parked | WindowMode::Ignored) {
             self.window_statuses.remove(&id);
             self.release_slot_for(id);
         }
-        self.save_config();
         self.reconcile();
 
         if let Some(index) = self.tables.iter().position(|table| table.id == id) {
@@ -347,6 +352,12 @@ impl Controller {
                 WindowMode::TopRight | WindowMode::FreeSpace | WindowMode::Ignored => {}
             }
         }
+        if matches!(mode, WindowMode::Parked | WindowMode::Ignored) {
+            self.compact_active_poker_columns();
+        } else if mode == WindowMode::Arranged {
+            self.sync_poker_columns();
+        }
+        self.save_config();
         self.arrange();
     }
 
@@ -642,7 +653,7 @@ impl Controller {
     fn sync_poker_columns(&mut self) -> bool {
         let before = self.config.poker_columns.clone();
         let mut live_counts = HashMap::new();
-        for table in &self.tables {
+        for table in self.tables.iter().filter(|table| table.enabled) {
             *live_counts
                 .entry((table.signature.clone(), table.poker_client))
                 .or_insert(0_usize) += 1;
@@ -663,7 +674,8 @@ impl Controller {
         }
 
         if !self.config.preserve_table_slots {
-            self.config.poker_columns = compact_columns(self.tables.iter());
+            self.config.poker_columns =
+                compact_columns(self.tables.iter().filter(|table| table.enabled));
         } else {
             while self.config.poker_columns.len() < 2 {
                 self.config
@@ -677,7 +689,7 @@ impl Controller {
                     .or_insert(0_usize) += 1;
             }
             let mut pending = Vec::new();
-            for table in &self.tables {
+            for table in self.tables.iter().filter(|table| table.enabled) {
                 let remaining = assigned_counts
                     .entry((table.signature.clone(), table.poker_client))
                     .or_insert(0);
@@ -704,6 +716,19 @@ impl Controller {
             .map(|table| table.signature.clone())
             .collect();
         before != self.config.poker_columns
+    }
+
+    fn compact_active_poker_columns(&mut self) {
+        self.config.poker_columns =
+            compact_columns(self.tables.iter().filter(|table| table.enabled));
+        if self.config.preserve_table_slots {
+            normalize_preserved_columns(&mut self.config.poker_columns);
+        }
+        self.config.table_order = self
+            .tables
+            .iter()
+            .map(|table| table.signature.clone())
+            .collect();
     }
 
     fn sort_tables_by_columns(&mut self) {
@@ -1461,7 +1486,8 @@ fn resolved_slot_table_indices(
     for (slot, signature) in signature_slots(columns) {
         let expected_client = slot_client(slot);
         if let Some((index, table)) = tables.iter().enumerate().find(|(_, table)| {
-            table.signature == *signature
+            table.enabled
+                && table.signature == *signature
                 && table.poker_client == expected_client
                 && !used.contains(&table.id)
         }) {

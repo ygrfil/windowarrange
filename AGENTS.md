@@ -136,7 +136,7 @@ Before delivery, run:
 - Use Rust where it is suitable; it is the selected implementation language.
 - Keep the application strictly Windows-only; do not spend dependencies or implementation effort on macOS or Linux support.
 - Use automatic arrangement plus manual hotkeys.
-- Keep spatial assignments stable while the saved Preserve table slots preference is on. Closing or ignoring releases identity ownership to an anonymous hole; Park retains an owned ghost. Never let anonymous preservation expand the layout beyond two total columns, let LDPlayer claim a reserved column, and omit anonymous reserved columns at two or more active columns; manual Off compacts persistently.
+- Keep spatial assignments stable while the saved Preserve table slots preference is on. Closing, ignoring, or parking releases identity ownership; Park compacts the remaining active tables and appears only as its actual parked miniature, never as a reserved ghost. Never let anonymous preservation expand the layout beyond two total columns, let LDPlayer claim a reserved column, and omit anonymous reserved columns at two or more active columns; manual Off compacts persistently.
 - Preserve the ClubGG 4:3 shape. Never make LDPlayer narrower than Pokerrr 2's natural 9:16 portrait ratio, retain a wider detected ratio, and prevent repeated reflow from learning a narrower arranged shape.
 - Float the compact panel above tables and allow it to minimize to the system tray.
 - Add new tables as enabled at the end of the current order.
@@ -148,7 +148,7 @@ Before delivery, run:
 - Preserve the neutral Table Arranger Control shell identity for compatibility with Asian Hand Converter and similar software.
 - Keep the executable, window, and tray icon blue with a spade silhouette and a centered white plus.
 - Launch release builds as administrator through the embedded manifest.
-- Keep the panel compact and modern: a short horizontal toolbar, a scaled desktop-proportional poker mirror with labeled placeholders, parked ghosts, and interactive named parked miniatures; a separate ordinary-window area with matching vector controls; and all secondary controls/status in Settings.
+- Keep the panel compact and modern: a short horizontal toolbar, a scaled desktop-proportional poker mirror with labeled placeholders and interactive named parked miniatures at their actual positions, but no reserved parked-table ghosts; a separate ordinary-window area with matching vector controls; and all secondary controls/status in Settings.
 - Open Settings as a separate compact native window that remains fully visible when its hotkey section is expanded and does not inflate or obscure the main workspace.
 - Keep the workspace visually structured and space-efficient: start poker and ordinary-window cards directly below the toolbar, omit section descriptions, separate active poker tables from parked and ignored poker windows with spacing and a divider, and automatically shrink panel height when fewer rows are visible without clipping the final row.
 - Number ClubGG geometry down each column: 1 above 2, 3 above 4, and 5 above 6. Leave the lower half of an odd final ClubGG column empty.

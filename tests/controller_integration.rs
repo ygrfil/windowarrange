@@ -245,9 +245,9 @@ fn closing_disabling_and_reordering_preserve_relative_order() {
         })
         .unwrap();
     let reordered = wait_for_snapshot(&handle.snapshots, |snapshot| {
-        ids(snapshot) == vec![5, 2, 3, 4, 1]
+        ids(snapshot) == vec![5, 3, 4, 1, 2]
     });
-    assert_eq!(ids(&reordered), vec![5, 2, 3, 4, 1]);
+    assert_eq!(ids(&reordered), vec![5, 3, 4, 1, 2]);
 
     backend
         .candidates
@@ -259,7 +259,7 @@ fn closing_disabling_and_reordering_preserve_relative_order() {
         .send(ControllerCommand::ForceArrange)
         .unwrap();
     let closed = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 4);
-    assert_eq!(ids(&closed), vec![5, 2, 4, 1]);
+    assert_eq!(ids(&closed), vec![5, 4, 1, 2]);
 
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
@@ -606,7 +606,7 @@ fn preserve_slots_auto_suppresses_for_two_busy_columns_and_restores_after_park()
 }
 
 #[test]
-fn parked_table_keeps_a_ghost_and_closed_table_releases_its_owner() {
+fn parked_table_releases_its_slot_and_leaves_only_its_parked_miniature() {
     let backend = MockBackend::with_tables(2);
     let store = ConfigStore::at(temp_config_path("parked-slot-ghost"));
     let handle = spawn_controller(Arc::new(backend.clone()), AppConfig::default(), store);
@@ -620,11 +620,18 @@ fn parked_table_keeps_a_ghost_and_closed_table_releases_its_owner() {
         })
         .unwrap();
     let parked = wait_for_snapshot(&handle.snapshots, |snapshot| {
-        snapshot
+        snapshot.tables.iter().any(|table| {
+            table.id == WindowId(1) && !table.enabled && table.status == TableStatus::Parked
+        }) && snapshot
             .poker_slots
             .iter()
-            .any(|slot| slot.occupant == Some(WindowId(1)) && slot.parked)
+            .all(|slot| slot.occupant != Some(WindowId(1)))
     });
+    assert!(
+        parked.poker_slots.iter().any(|slot| {
+            slot.id == PokerSlotId::club(0, 0) && slot.occupant == Some(WindowId(2))
+        })
+    );
     assert_eq!(
         parked
             .candidates
@@ -634,6 +641,39 @@ fn parked_table_keeps_a_ghost_and_closed_table_releases_its_owner() {
             .current_rect,
         Rect::new(2512, 924, 240, 180)
     );
+
+    handle
+        .commands
+        .send(ControllerCommand::SetWindowMode {
+            id: WindowId(1),
+            mode: WindowMode::Arranged,
+        })
+        .unwrap();
+    let unparked = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot
+            .tables
+            .iter()
+            .any(|table| table.id == WindowId(1) && table.enabled)
+            && snapshot
+                .poker_slots
+                .iter()
+                .any(|slot| slot.occupant == Some(WindowId(1)))
+    });
+    assert!(unparked.poker_slots.iter().all(|slot| !slot.parked));
+
+    handle
+        .commands
+        .send(ControllerCommand::SetEnabled {
+            id: WindowId(1),
+            enabled: false,
+        })
+        .unwrap();
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot
+            .poker_slots
+            .iter()
+            .all(|slot| slot.occupant != Some(WindowId(1)))
+    });
 
     backend
         .candidates
@@ -652,11 +692,55 @@ fn parked_table_keeps_a_ghost_and_closed_table_releases_its_owner() {
             .all(|slot| slot.occupant != Some(WindowId(1)))
     );
     assert!(
-        closed
-            .poker_slots
-            .iter()
-            .any(|slot| slot.id == PokerSlotId::club(0, 0) && slot.occupant.is_none())
+        closed.poker_slots.iter().any(|slot| {
+            slot.id == PokerSlotId::club(0, 0) && slot.occupant == Some(WindowId(2))
+        })
     );
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
+fn many_parked_tables_do_not_expand_the_poker_mirror() {
+    let backend = MockBackend::with_tables(6);
+    let store = ConfigStore::at(temp_config_path("many-parked-tables-no-ghosts"));
+    let config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    let handle = spawn_controller(Arc::new(backend), config, store.clone());
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 6);
+
+    for id in 1..=4 {
+        handle
+            .commands
+            .send(ControllerCommand::SetEnabled {
+                id: WindowId(id),
+                enabled: false,
+            })
+            .unwrap();
+    }
+    let parked = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot
+            .tables
+            .iter()
+            .filter(|table| !table.enabled)
+            .count()
+            == 4
+            && snapshot
+                .poker_slots
+                .iter()
+                .filter_map(|slot| slot.occupant)
+                .collect::<std::collections::HashSet<_>>()
+                == std::collections::HashSet::from([WindowId(5), WindowId(6)])
+    });
+
+    assert!(parked.poker_slots.iter().all(|slot| !slot.parked));
+    assert_eq!(
+        parked.poker_slots.iter().map(|slot| slot.id.column).max(),
+        Some(1)
+    );
+    assert_eq!(store.load().unwrap().poker_columns.len(), 2);
 
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
