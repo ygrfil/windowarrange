@@ -160,6 +160,52 @@ fn identical_table_signatures_resolve_to_distinct_windows_and_slots() {
 }
 
 #[test]
+fn identical_table_signatures_can_swap_top_and_bottom_slots() {
+    let backend = MockBackend::with_tables(2);
+    {
+        let mut candidates = backend.candidates.lock().unwrap();
+        candidates[1].signature = candidates[0].signature.clone();
+        candidates[1].label = candidates[0].label.clone();
+    }
+    let store = ConfigStore::at(temp_config_path("duplicate-signature-vertical-swap"));
+    let config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    let handle = spawn_controller(Arc::new(backend), config, store);
+    let initial = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 2);
+    assert!(
+        initial.poker_slots.iter().any(|slot| {
+            slot.id == PokerSlotId::club(0, 0) && slot.occupant == Some(WindowId(1))
+        })
+    );
+    assert!(
+        initial.poker_slots.iter().any(|slot| {
+            slot.id == PokerSlotId::club(0, 1) && slot.occupant == Some(WindowId(2))
+        })
+    );
+
+    handle
+        .commands
+        .send(ControllerCommand::MoveToSlot {
+            source: WindowId(1),
+            destination: PokerSlotId::club(0, 1),
+        })
+        .unwrap();
+    let swapped =
+        wait_for_snapshot(&handle.snapshots, |snapshot| {
+            snapshot.poker_slots.iter().any(|slot| {
+                slot.id == PokerSlotId::club(0, 0) && slot.occupant == Some(WindowId(2))
+            }) && snapshot.poker_slots.iter().any(|slot| {
+                slot.id == PokerSlotId::club(0, 1) && slot.occupant == Some(WindowId(1))
+            })
+        });
+    assert_eq!(ids(&swapped), vec![2, 1]);
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
 fn closing_disabling_and_reordering_preserve_relative_order() {
     let backend = MockBackend::with_tables(5);
     let store = ConfigStore::at(temp_config_path("state-transitions"));

@@ -758,12 +758,34 @@ impl Controller {
         let whole_column = source_client == PokerClientKind::LdPlayer
             || destination_client == Some(PokerClientKind::LdPlayer)
             || destination.row.is_none();
+        let mut intended_owners: HashMap<_, _> = resolved
+            .iter()
+            .map(|(slot, index)| (*slot, self.tables[*index].id))
+            .collect();
 
         if whole_column {
             self.config
                 .poker_columns
                 .swap(source_slot.column, destination.column);
+            intended_owners = intended_owners
+                .into_iter()
+                .map(|(mut slot, owner)| {
+                    if slot.column == source_slot.column {
+                        slot.column = destination.column;
+                    } else if slot.column == destination.column {
+                        slot.column = source_slot.column;
+                    }
+                    (slot, owner)
+                })
+                .collect();
         } else {
+            let destination_owner = intended_owners.remove(&destination);
+            intended_owners.remove(&source_slot);
+            if let Some(owner) = destination_owner {
+                intended_owners.insert(source_slot, owner);
+            }
+            intended_owners.insert(destination, source);
+
             let destination_signature =
                 signature_at_slot(&self.config.poker_columns, destination).cloned();
             set_slot_signature(
@@ -777,6 +799,16 @@ impl Controller {
                 Some(source_signature),
             );
         }
+        let intended_rank_by_id: HashMap<_, _> = signature_slots(&self.config.poker_columns)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(rank, (slot, _))| intended_owners.get(&slot).map(|owner| (*owner, rank)))
+            .collect();
+        self.tables.sort_by_key(|table| {
+            intended_rank_by_id
+                .get(&table.id)
+                .map_or((1_u8, usize::MAX), |rank| (0_u8, *rank))
+        });
         self.sort_tables_by_columns();
         true
     }
