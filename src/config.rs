@@ -6,9 +6,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::model::{CandidateDisposition, WindowSignature};
+use crate::model::{CandidateDisposition, PokerColumnAssignment, WindowSignature};
 
-const CONFIG_VERSION: u32 = 6;
+const CONFIG_VERSION: u32 = 7;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -61,11 +61,13 @@ pub struct AppConfig {
     pub version: u32,
     pub selected_monitor: Option<String>,
     pub auto_arrange: bool,
-    pub reserve_two_slots: bool,
+    #[serde(alias = "reserve_two_slots")]
+    pub preserve_table_slots: bool,
     pub default_application_mode: ApplicationDefault,
     pub table_aspect_ratio: Option<f64>,
     pub detection_rules: Vec<DetectionRule>,
     pub table_order: Vec<WindowSignature>,
+    pub poker_columns: Vec<PokerColumnAssignment>,
     pub hotkeys: HotkeySettings,
 }
 
@@ -75,11 +77,12 @@ impl Default for AppConfig {
             version: CONFIG_VERSION,
             selected_monitor: None,
             auto_arrange: true,
-            reserve_two_slots: true,
+            preserve_table_slots: true,
             default_application_mode: ApplicationDefault::Ignored,
             table_aspect_ratio: None,
             detection_rules: Vec::new(),
             table_order: Vec::new(),
+            poker_columns: Vec::new(),
             hotkeys: HotkeySettings::default(),
         }
     }
@@ -289,7 +292,16 @@ mod tests {
     fn older_configurations_default_to_reserving_two_slots() {
         let config: AppConfig = serde_json::from_str(r#"{"version":4}"#).unwrap();
 
-        assert!(config.reserve_two_slots);
+        assert!(config.preserve_table_slots);
         assert_eq!(config.default_application_mode, ApplicationDefault::Ignored);
+    }
+
+    #[test]
+    fn version_six_reservation_flag_migrates_to_slot_preservation() {
+        let config: AppConfig =
+            serde_json::from_str(r#"{"version":6,"reserve_two_slots":false}"#).unwrap();
+
+        assert!(!config.preserve_table_slots);
+        assert!(config.poker_columns.is_empty());
     }
 }

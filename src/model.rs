@@ -91,6 +91,57 @@ pub enum WindowMode {
     Ignored,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PokerClientKind {
+    ClubGg,
+    LdPlayer,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct PokerSlotId {
+    pub column: usize,
+    pub row: Option<u8>,
+}
+
+impl PokerSlotId {
+    #[must_use]
+    pub const fn club(column: usize, row: u8) -> Self {
+        Self {
+            column,
+            row: Some(row),
+        }
+    }
+
+    #[must_use]
+    pub const fn full_height(column: usize) -> Self {
+        Self { column, row: None }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PokerColumnAssignment {
+    ClubGg {
+        top: Option<WindowSignature>,
+        bottom: Option<WindowSignature>,
+    },
+    LdPlayer {
+        table: Option<WindowSignature>,
+    },
+    Empty,
+}
+
+impl PokerColumnAssignment {
+    #[must_use]
+    pub const fn empty_club() -> Self {
+        Self::ClubGg {
+            top: None,
+            bottom: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct WindowCandidate {
     pub id: WindowId,
@@ -99,7 +150,8 @@ pub struct WindowCandidate {
     pub class_name: String,
     pub signature: WindowSignature,
     pub rect: Rect,
-    pub is_clubgg: bool,
+    pub poker_client: Option<PokerClientKind>,
+    pub preferred_aspect_ratio: f64,
     pub likely_table: bool,
 }
 
@@ -127,8 +179,11 @@ pub struct ManagedTable {
     pub id: WindowId,
     pub label: String,
     pub signature: WindowSignature,
+    pub poker_client: PokerClientKind,
+    pub preferred_aspect_ratio: f64,
     pub enabled: bool,
     pub last_active_rect: Rect,
+    pub current_rect: Rect,
     pub status: TableStatus,
 }
 
@@ -146,7 +201,8 @@ pub struct CandidateView {
     pub label: String,
     pub process_name: String,
     pub class_name: String,
-    pub is_clubgg: bool,
+    pub poker_client: Option<PokerClientKind>,
+    pub current_rect: Rect,
     pub likely_table: bool,
     pub mode: WindowMode,
     pub slot: Option<usize>,
@@ -154,13 +210,27 @@ pub struct CandidateView {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct PokerSlotView {
+    pub id: PokerSlotId,
+    pub rect: Rect,
+    pub occupant: Option<WindowId>,
+    pub parked: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct UiSnapshot {
     pub tables: Vec<ManagedTable>,
     pub candidates: Vec<CandidateView>,
+    pub poker_slots: Vec<PokerSlotView>,
+    pub poker_work_area: Option<Rect>,
     pub monitors: Vec<MonitorInfo>,
     pub selected_monitor: Option<String>,
     pub auto_arrange: bool,
-    pub reserve_two_slots: bool,
+    /// The preservation state currently applied to layout geometry.
+    pub preserve_table_slots: bool,
+    /// The persisted user preference, before automatic suppression.
+    pub preserve_table_slots_requested: bool,
+    pub preserve_table_slots_auto_suppressed: bool,
     pub default_application_mode: crate::config::ApplicationDefault,
     pub aspect_ratio: f64,
     pub status_message: String,
@@ -172,10 +242,14 @@ impl Default for UiSnapshot {
         Self {
             tables: Vec::new(),
             candidates: Vec::new(),
+            poker_slots: Vec::new(),
+            poker_work_area: None,
             monitors: Vec::new(),
             selected_monitor: None,
             auto_arrange: true,
-            reserve_two_slots: true,
+            preserve_table_slots: true,
+            preserve_table_slots_requested: true,
+            preserve_table_slots_auto_suppressed: false,
             default_application_mode: crate::config::ApplicationDefault::Ignored,
             aspect_ratio: 4.0 / 3.0,
             status_message: "Starting…".to_owned(),

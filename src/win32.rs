@@ -58,8 +58,8 @@ use crate::{
     controller::ControllerCommand,
     identity::PANEL_TITLE,
     model::{
-        BackendError, MonitorInfo, Rect, Size, WindowBackend, WindowCandidate, WindowId,
-        WindowSignature,
+        BackendError, MonitorInfo, PokerClientKind, Rect, Size, WindowBackend, WindowCandidate,
+        WindowId, WindowSignature,
     },
 };
 
@@ -456,6 +456,14 @@ fn inspect_window(
         || process_name.to_ascii_lowercase().contains("clubgg")
         || title.to_ascii_lowercase().contains("clubgg")
         || class_name.to_ascii_lowercase().contains("clubgg");
+    let belongs_to_ldplayer = is_ldplayer_process(&process_name);
+    let poker_client = if belongs_to_clubgg {
+        Some(PokerClientKind::ClubGg)
+    } else if belongs_to_ldplayer {
+        Some(PokerClientKind::LdPlayer)
+    } else {
+        None
+    };
 
     let rect = window_rect(hwnd).ok()?;
     if rect.width < 100 || rect.height < 100 {
@@ -468,6 +476,9 @@ fn inspect_window(
     }
 
     let lower_title = title.to_ascii_lowercase();
+    if belongs_to_clubgg && is_generic_clubgg_surface(&lower_title) {
+        return None;
+    }
     let utility_words = [
         "lobby",
         "cashier",
@@ -482,16 +493,22 @@ fn inspect_window(
     let ratio = rect.aspect_ratio().unwrap_or(0.0);
     let table_shape = (0.9..=2.1).contains(&ratio);
     let tool_window = ex_style & WS_EX_TOOLWINDOW.0 != 0;
-    if !belongs_to_clubgg
+    if poker_client.is_none()
         && (title.trim().is_empty() || tool_window || is_system_shell_window(&class_name))
     {
         return None;
     }
-    let likely_table = !looks_utility && table_shape && (!title.is_empty() || !tool_window);
-    let likely_table = belongs_to_clubgg && likely_table;
-    let label = if title.trim().is_empty() && belongs_to_clubgg {
-        format!("ClubGG window ({class_name})")
-    } else if title.trim().is_empty() {
+    if belongs_to_ldplayer && (tool_window || title.trim().is_empty()) {
+        return None;
+    }
+    let likely_table = match poker_client {
+        Some(PokerClientKind::ClubGg) => {
+            !looks_utility && table_shape && (!title.is_empty() || !tool_window)
+        }
+        Some(PokerClientKind::LdPlayer) => !looks_utility,
+        None => false,
+    };
+    let label = if title.trim().is_empty() {
         format!("{process_name} window")
     } else {
         title
@@ -508,9 +525,21 @@ fn inspect_window(
             title_pattern: normalize_title_pattern(&lower_title),
         },
         rect,
-        is_clubgg: belongs_to_clubgg,
+        poker_client,
+        preferred_aspect_ratio: ratio,
         likely_table,
     })
+}
+
+fn is_ldplayer_process(process_name: &str) -> bool {
+    matches!(
+        process_name.to_ascii_lowercase().as_str(),
+        "dnplayer" | "dnplayer.exe"
+    )
+}
+
+fn is_generic_clubgg_surface(title: &str) -> bool {
+    matches!(title.trim().to_ascii_lowercase().as_str(), "" | "clubgg")
 }
 
 fn is_system_shell_window(class_name: &str) -> bool {
@@ -625,7 +654,10 @@ fn map_last_error(context: &str) -> BackendError {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_system_shell_window, normalize_title_pattern};
+    use super::{
+        is_generic_clubgg_surface, is_ldplayer_process, is_system_shell_window,
+        normalize_title_pattern,
+    };
 
     #[test]
     fn title_patterns_remove_variable_numbers() {
@@ -640,5 +672,20 @@ mod tests {
         assert!(is_system_shell_window("Progman"));
         assert!(is_system_shell_window("Shell_TrayWnd"));
         assert!(!is_system_shell_window("Chrome_WidgetWin_1"));
+    }
+
+    #[test]
+    fn only_the_ldplayer_frontend_process_matches() {
+        assert!(is_ldplayer_process("dnplayer.exe"));
+        assert!(is_ldplayer_process("DNPLAYER"));
+        assert!(!is_ldplayer_process("Ld9BoxHeadless.exe"));
+        assert!(!is_ldplayer_process("Ld9BoxSVC.exe"));
+    }
+
+    #[test]
+    fn generic_clubgg_shell_titles_are_not_poker_tables() {
+        assert!(is_generic_clubgg_surface(""));
+        assert!(is_generic_clubgg_surface("  ClubGG  "));
+        assert!(!is_generic_clubgg_surface("PLO5 10-20 - Table 2"));
     }
 }

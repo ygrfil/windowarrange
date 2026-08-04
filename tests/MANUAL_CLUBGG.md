@@ -1,37 +1,39 @@
-# Manual ClubGG acceptance
+# Manual poker-client acceptance
 
-Run these checks only by explicitly launching the release executable while the user is present. Automated tests must never execute this checklist or move real ClubGG windows.
+Run these checks only by explicitly launching the release executable while the user is present. Automated tests must never execute this checklist or move real ClubGG or LDPlayer windows.
 
-1. Open the ClubGG lobby and one table. Confirm only the table is managed and the table starts at the selected display's top-left.
-2. Repeat with 2 through 8 tables. Confirm every active table has equal outer dimensions, retains its natural shape, fits the working area, and avoids the taskbar.
-3. With five tables, close the middle table. Confirm the remaining four keep relative order and immediately refit to the best four-table layout.
-4. Disable several tables in the panel and through numbered shortcuts. Confirm they shrink to their smallest supported sizes and line up without overlap from the selected display's bottom-right toward the left while active tables refit.
-5. Re-enable the parked table. Confirm it returns to its prior ordered slot and all active tables refit equally.
-6. Use the table-number click controls to reorder tables. Confirm the windows move without stealing focus and the other row controls remain in place.
-7. Manually move one arranged table. Confirm it remains there until another table opens/closes/toggles, order changes, or **Arrange now** is used.
-8. Open a new table. Confirm it is enabled, appended, and included after the 500 ms debounce.
-9. Confirm every discovered ClubGG window appears in one list. Use **◎** to identify the lobby and tables, set the lobby to **Ignore**, a table to **Park**, and the remaining tables to **Arrange**; restart and confirm classifications are remembered.
-10. Change target monitors and disconnect the selected monitor. Confirm fallback to the primary monitor.
-11. Exercise every configurable global shortcut and verify conflicts are shown without disabling panel controls.
-12. Close and minimize the panel to the tray, restore it by tray click and shortcut, then use tray **Exit**. Confirm parked tables remain parked.
-13. Launch the release executable and confirm Windows always shows UAC before the panel starts. Confirm debug/test verification remains runnable without UAC.
-14. Arrange tables and confirm the panel row order and all row controls remain fixed even though the table screen coordinates change.
-15. Confirm the panel groups all arranged windows first, parked windows next, and ignored windows last while preserving relative order inside each group.
-16. With two tables, confirm they use the four-table size in the top-left and top-right slots. With three, confirm the third occupies bottom-left at the same size. Confirm four tables fill the same 2×2 slots.
-17. With five through eight tables, confirm slots 1–4 remain `(1,2)/(3,4)`, slot 5 appears above 6 in the next column, and slot 7 appears above 8 in the following column.
-18. If Asian Hand Converter is installed, leave it running and launch `Table-Arranger-Control.exe`. Confirm the neutral control panel remains open or available in the tray and can arrange repeatedly without a converter DLL crash.
-19. Confirm `%APPDATA%\ClubGGTools\ClubGG Table Arranger\config\logs\table-arranger.log` records startup, discovery-count changes, and arrangement results without full ClubGG table titles.
-20. Open several ordinary applications. Confirm every normal top-level window appears, the arranger itself and Windows desktop/taskbar surfaces do not appear, and every new ordinary window initially defaults to **Ignore** without moving. Change the global default in Settings to **Free** and **Top**, opening a new ordinary window after each change; confirm the new default applies immediately and survives restart, while an explicitly saved card choice still wins.
-21. Choose **Top-right** for an ordinary window. Confirm its size is preserved, it moves to the selected display's top-right without activation, and the choice survives restart.
-22. Choose **Fill space** with 1–8 active poker tables. Confirm the application fills only the full-height strip to the right of the rightmost active table, never a band below the tables, without changing poker-table size or placement. Confirm multiple Fill-space windows share that strip.
-23. Save Top-right or Fill-space for an ordinary window, exit through the tray, change the window title if possible, and relaunch. Confirm the saved behavior is restored. Confirm an exact rule still wins when two identifiable windows from one application have different choices.
-24. With Auto off, manually move a selected ordinary window and press **Arrange**. Confirm discovery and selected poker/ordinary placement are immediately reapplied. Turn Auto on and confirm the complete workspace is immediately reapplied again.
-25. Click one managed poker table number, then click a different table number in the compact poker board. Confirm the first table shows a selected outline and their numbered screen slots swap immediately without focus theft. Select a number and click it again to confirm selection is cancelled. Restart and confirm the swapped order is restored.
-26. Confirm the compact panel's top toolbar contains only Auto, Arrange, Settings, and tray hiding. Confirm display selection, 2 Slots, ordinary-window default, status/counts, and hotkey details are in Settings, while Locate and per-window modes remain on the cards.
-27. Upgrade from an older resized build. Confirm 0.5.0 discards stale panel geometry, cannot maximize, paints the entire client background, shows all toolbar actions without overlap or missing-glyph boxes, and keeps both panes bounded.
-28. Open 1–8 tables and several ordinary windows. Confirm all current entries and controls are visible simultaneously without scrolling, the dense two-column grids stay inside their panes, and no content stretches or clips the other pane.
-29. Mix active, parked, and ignored ClubGG windows. Confirm the poker pane has separate **Active tables** and **Inactive tables** groups, active cards remain above inactive cards, the redundant overall Poker heading is absent, and the ordinary-window pane aligns to the top of the workspace.
-30. Confirm the toolbar remains a single compact row and both table groups and ordinary-window cards appear immediately below it. With two active tables, three inactive tables, and three ordinary windows, confirm the bottom inactive card is fully visible. Confirm panel height automatically shrinks when cards close and grows only as needed, without leaving a large blank band under the last row.
-31. Confirm no Workspace, counts, status, Active tables, Inactive tables, Other, or saved-choices descriptions appear on the main board. A thin divider must still separate active from inactive poker cards; the removed information must remain available in Settings.
-32. Confirm the executable, taskbar window, and tray all show the same royal-blue icon with a dark-blue spade silhouette and a centered white plus.
-33. With a Fill-space application selected, test zero and one active poker table. Confirm 2 Slots is on by default and reserves exactly the normal two-table width. Turn it off while Auto is off and confirm the application immediately reclaims the unreserved right-side space; restart and confirm the switch choice is remembered. Confirm no placeholder poker window is created or moved.
+1. Open the ClubGG lobby and one table. Confirm only the table defaults to Active and it occupies the top half of the first ClubGG column.
+2. Repeat with 2 through 8 ClubGG tables. Confirm slots run down columns `(1/2)`, `(3/4)`, `(5/6)`, every ClubGG table remains equal and 4:3, and an odd final table leaves the lower half empty.
+3. Open Pokerrr 2 in LDPlayer 9. Confirm the eligible `dnplayer.exe` main window appears as an Active poker table while LDPlayer headless/service processes do not appear.
+4. With two ClubGG tables and one LDPlayer table, confirm the ClubGG pair shares the first full-height column and LDPlayer occupies its own full-height column to the right at its detected aspect ratio.
+5. Add more ClubGG and LDPlayer windows until full-height columns no longer fit. Confirm the mixed layout becomes shorter without changing either client aspect ratio or overlapping windows.
+6. Confirm the poker pane is a scaled spatial mirror of the selected monitor: tile position, relative size, empty lower halves, LDPlayer full-height columns, and parked outlines match the desktop. Confirm untitled or simply titled `ClubGG` shell windows do not appear as table tiles.
+7. Confirm every poker tile uses small painter-drawn icons for Locate, Active, Park, and Ignore with correct tooltips and no missing-glyph boxes. Confirm ordinary application cards use matching Locate, Ignore, Fill-space, and Top-right icons and Settings explains all six.
+8. Select a ClubGG table and click another ClubGG table. Confirm only those two real windows swap and the change survives restart.
+9. With table 1 above placeholder 2, select table 1 and click placeholder 2. Confirm it moves there, its previous position becomes a dashed tile explicitly named Placeholders with a muted number badge, and the hole survives Arrange, Auto reflow, and restart while preservation is effective.
+10. Select LDPlayer and click either member of a ClubGG column. Confirm the entire LDPlayer column swaps with the ClubGG pair or single-plus-empty column while the pair keeps its top/bottom order.
+11. Click the selected table again and confirm selection is cancelled without moving anything.
+12. Park a ClubGG and an LDPlayer table. Confirm each real window uses its own minimum supported size in the bottom-right parking row, while an orange owned ghost remains in its active slot and the named actual parked miniature appears at the mirrored bottom-right. Left-click that miniature and confirm Locate runs; right-click it and confirm the table unparks.
+13. Swap an active table with a parked-table ghost. Confirm only slot reservations change; the parked window stays parked until explicitly activated.
+14. Close a table. Confirm its identity disappears immediately while its position becomes an anonymous empty placeholder when Preserve table slots is on.
+15. Set a poker table to Ignore. Confirm its reservation is released and it remains accessible with Locate/Active/Park/Ignore controls in the compact unmanaged row.
+16. Confirm Preserve table slots is on by default and never adds anonymous space beyond two total columns. With one ClubGG column, open LDPlayer and confirm it consumes the second reserved column rather than creating a third. At two or more active columns confirm preservation is reported inactive, but its checkbox remains clickable; close or Park below two and confirm the saved On preference becomes effective again.
+17. With fewer than two occupied columns, turn Preserve table slots off manually while Auto is off. Confirm holes disappear, active poker windows compact immediately, and Fill-space applications immediately use the actual poker boundary. Open/close or Park/unpark more tables and confirm the manual Off choice remains off. Turn it on again and confirm the minimum two-column footprint returns without creating or moving fake windows.
+18. Open a new ClubGG table with an empty half-slot available. Confirm it fills the earliest compatible placeholder. Open a new LDPlayer main window and confirm it receives a separate column after the default ClubGG section.
+19. Manually move one arranged poker table. Confirm it remains there until another structural reflow, slot change, or explicit Arrange action.
+20. Change target monitors and disconnect the selected monitor. Confirm fallback to the primary monitor and that the mirrored board updates to the chosen working area.
+21. Exercise every configurable global shortcut and verify conflicts are shown without disabling panel controls. Confirm each actual window retains one numbered badge/hotkey slot even though LDPlayer spans a full-height column.
+22. Use Locate on ClubGG and LDPlayer. Confirm the chosen window restores, raises, requests foreground focus, and only flashes when Windows denies activation.
+23. Close and minimize the panel to the tray, restore it by tray click and shortcut, then use tray Exit. Confirm parked tables remain parked.
+24. Launch the release executable and confirm Windows shows UAC before the panel starts. Confirm debug/test verification remains runnable without UAC.
+25. If Asian Hand Converter is installed, leave it running and launch `Table-Arranger-Control.exe`. Confirm the neutral control panel remains open or available in the tray and arranges repeatedly without a converter DLL crash.
+26. Confirm `%APPDATA%\ClubGGTools\ClubGG Table Arranger\config\logs\table-arranger.log` records startup, discovery-count changes, and arrangement results without full ClubGG or LDPlayer titles.
+27. Open several ordinary applications. Confirm normal top-level windows appear separately, default to Ignore, and retain Ignore/Free/Top choices across restart and title changes.
+28. Choose Top-right for an ordinary window. Confirm its size is preserved and it moves to the selected display's top-right without activation.
+29. Choose Fill space. Confirm it uses only the full-height strip to the right of the rightmost actual or preserved poker column, never a band below poker tables, and multiple Fill-space windows share the strip.
+30. With Auto off, press Arrange and confirm discovery plus all selected poker and ordinary placement reapplies immediately. Enable Auto and confirm the complete workspace applies immediately again.
+31. Confirm the top toolbar contains only Auto, Arrange, Settings, and tray hiding. Confirm display selection, Preserve table slots, icon legend, ordinary-window default, status/counts, and hotkeys remain in the independent Settings window.
+32. Open 1–8 poker windows and several ordinary windows. Confirm every mirrored tile, placeholder, unmanaged poker control, and ordinary card remains visible without scroll areas or pane overlap, and the panel height shrinks and grows without clipping.
+33. Expand and collapse Settings hotkeys. Confirm the independent non-resizable Settings window refits without inflating or continuously repainting the main panel.
+34. Confirm the executable, taskbar window, and tray all show the same royal-blue icon with a dark-blue spade silhouette and centered white plus.
+35. Confirm idle CPU, RAM, and GPU use remain proportionate to a compact utility and that discovery still reacts after the 200 ms native-event debounce.

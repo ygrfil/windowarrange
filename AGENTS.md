@@ -70,21 +70,22 @@ Default section order:
 - Prefer safe Rust. Confine Win32 `unsafe` operations to the native backend and expose safe typed interfaces.
 - Manage only user-approved window geometry. Never automate poker actions, read cards, click controls, or alter application internals.
 - Preserve table focus and Z-order while arranging. The explicit user-clicked **Locate** action is the only exception: restore, raise, and request foreground focus for that selected window. Never surprise-move real ClubGG windows from automated tests.
-- Preserve the table aspect ratio, use equal outer dimensions, and anchor layouts at the selected monitor's top-left working area. For 1–3 active tables, reuse the four-table grid size and first row-major slots; for 4+ tables, maximize equal per-table area. Above four tables, preserve slots 1–4 as the original 2×2 block and add slots 5–8 in top/bottom vertical pairs extending right.
+- Anchor poker layouts at the selected monitor's top-left working area. Keep ClubGG tables equal and 4:3 in two-high columns `(1/2)`, `(3/4)`, `(5/6)`; keep each LDPlayer/Pokerrr 2 window at its detected aspect ratio in a separate full-height column. Use full work-area height when the mixed columns fit and reduce their shared height only when required to avoid overlap.
 - Support stable ordering, automatic reflow, enabled/parked tables, configurable hotkeys, a floating panel, and tray operation.
-- Discover normal visible top-level application windows while excluding the arranger, desktop/taskbar shell surfaces, cloaked windows, child windows, disabled windows, and non-ClubGG tool windows.
+- Discover normal visible top-level application windows while excluding the arranger, desktop/taskbar shell surfaces, cloaked windows, child windows, disabled windows, tool windows, and untitled or exact-title `ClubGG` shell surfaces. Treat eligible `dnplayer.exe` main windows as LDPlayer poker tables while excluding LDPlayer headless and service processes.
 - Show selected poker and application windows first, then parked poker tables, then ignored windows, with stable session order inside each group. Screen movement must never reorder rows within a group, and signature-based choices must survive restarts.
-- Default likely ClubGG poker tables to **Arrange**. The configurable ordinary-window default starts at **Ignore** and may be changed in Settings to **Top-right** or **Fill space**; an explicit saved window rule always overrides the default.
+- Default likely ClubGG and LDPlayer poker tables to **Arrange**. The configurable ordinary-window default starts at **Ignore** and may be changed in Settings to **Top-right** or **Fill space**; an explicit saved window rule always overrides the default.
 - **Top-right** preserves an ordinary window's current size and anchors it to the selected display's top-right. **Fill space** resizes it only into the full-height vertical strip between the rightmost active poker-table edge and the selected display's right edge; it must never use space below poker tables. Multiple selected ordinary windows share that strip.
-- Provide a persistent **2 Slots** switch in Settings, enabled by default. When enabled and fewer than two poker tables are active, calculate the Fill-space boundary as if two table slots were occupied; never create or move placeholder windows. Toggling it must reapply placement immediately even when Auto is off.
+- Provide a persistent, always-clickable **Preserve table slots** user preference in Settings, enabled by default. Anonymous reserved space has a maximum two-column total footprint, not two extra columns; LDPlayer must consume an available reserved column. Apply preservation while fewer than two active columns are occupied, temporarily suppress it at two or more, and restore it below two. A manual Off preference remains off.
 - Persist ordinary-window choices with an exact title-aware rule plus a process/class fallback so choices survive title changes and restarts. Exact rules allow different currently identified windows from one application to retain different choices.
 - The single **Arrange** action must reconcile discovery and immediately reapply all selected poker and ordinary-window placement. Enabling Auto must also immediately apply the complete workspace.
 - Park disabled poker tables at their actual minimum supported sizes, starting at the selected display's bottom-right and continuing directly left without overlap; wrap upward only when a row cannot fit.
-- Present a compact workspace board: a single top toolbar with Auto, Arrange, Settings, and tray hiding; click-selectable poker-table tiles; a separate ordinary-window area; and per-window Locate/mode controls. Put display selection, 2 Slots, default ordinary-window behavior, counts/status, and hotkey details in Settings.
+- Present a compact workspace board: a single top toolbar with Auto, Arrange, Settings, and tray hiding; a scaled spatial mirror of poker slots and actual parked positions; a separate ordinary-window area; and compact painter-drawn action icons shared by poker and ordinary-window tiles. Actual parked miniatures show the table name, locate on left-click, and unpark on right-click. Put display selection, Preserve table slots, the complete icon legend, default ordinary-window behavior, counts/status, and hotkey details in an independent native Settings window.
 - Keep the panel responsive within 680–820 points wide and automatically fit its height between 180 and 420 points to the visible cards. Disable maximizing, fill the full viewport background, and show the complete main workspace without scroll areas. Use dense two-column grids and constrain every tile to its pane.
+- Keep Settings independent from the main panel, non-resizable, and automatically fitted to its collapsed or expanded content without scroll areas. Use a deferred native viewport so it can repaint independently without forcing the main panel to stay tall or continuously redraw.
 - Keep the compact controller resource-efficient: use the eframe Glow renderer, wake the UI from actual state and input events, and bound/coalesce background event delivery.
-- Clicking one managed poker table number selects it; clicking another table number changes the controller's table order, immediately swaps display slots, and persists the new order. Clicking the selected number again cancels selection.
-- Target ClubGG first and keep discovery profiles extensible for future GGPoker support.
+- Clicking one managed poker table selects it; clicking another occupied slot swaps individual same-client tables or whole ClubGG/LDPlayer columns, while clicking an empty placeholder moves the selected table and preserves the old hole. Persist spatial assignments and cancel selection when the same table is clicked again.
+- Support ClubGG and LDPlayer/Pokerrr 2 profiles and keep discovery profiles extensible for future GGPoker support.
 - Keep the executable, PE metadata, app ID, top-level panel title, and tray identity neutral: use **Table Arranger Control** rather than `ClubGG`. Third-party hand converters may otherwise mistake the arranger for the poker client and inject incompatible ClubGG hooks.
 - Use one shared app-icon definition for the executable, window, and tray: a royal-blue field with a dark-blue spade silhouette and a centered white plus.
 - Deliver manually launched, portable `x86_64-pc-windows-msvc` release executables under `dist/` without an installer or startup registration. Keep `Table-Arranger-Control.exe` as the current release and a matching `Table-Arranger-Control-<version>.exe` archive.
@@ -103,11 +104,11 @@ Default section order:
 
 - Keep application code under `src/`, integration and property tests under `tests/`, and Windows resources under `assets/`.
 - Publish release artifacts only under `dist/`. Before publishing, replace the stale current executable, then copy the verified build as both the current neutral filename and the versioned archive. Preserve older versioned archives unless the user explicitly approves their deletion.
-- Keep full ClubGG window titles out of ordinary logs and persisted diagnostics.
+- Keep full poker-window titles out of ordinary logs and persisted diagnostics.
 - Ship the release executable with a `requireAdministrator` manifest because ClubGG table movement on the target system requires matching elevated privileges. Windows must display the standard UAC prompt at launch.
 - Keep debug and test artifacts `asInvoker` so automated verification can execute without elevation; this exception does not apply to delivered release binaries.
 - Write redacted runtime diagnostics to `%APPDATA%\ClubGGTools\ClubGG Table Arranger\config\logs\table-arranger.log`.
-- Keep live ClubGG verification explicit and manual.
+- Keep live ClubGG and LDPlayer verification explicit and manual.
 
 ## Verification
 
@@ -134,8 +135,8 @@ Before delivery, run:
 - Use Rust where it is suitable; it is the selected implementation language.
 - Keep the application strictly Windows-only; do not spend dependencies or implementation effort on macOS or Linux support.
 - Use automatic arrangement plus manual hotkeys.
-- Keep table order stable while compacting after close or disable operations.
-- Preserve the ClubGG table shape.
+- Keep spatial assignments stable while the saved Preserve table slots preference is on. Closing or ignoring releases identity ownership to an anonymous hole; Park retains an owned ghost. Never let anonymous preservation expand the layout beyond two total columns, let LDPlayer claim a reserved column, and omit anonymous reserved columns at two or more active columns; manual Off compacts persistently.
+- Preserve the ClubGG 4:3 shape and each LDPlayer window's detected Pokerrr 2 aspect ratio.
 - Float the compact panel above tables and allow it to minimize to the system tray.
 - Add new tables as enabled at the end of the current order.
 - Do not immediately undo manual moves; wait until the next structural reflow or explicit arrange action.
@@ -145,14 +146,15 @@ Before delivery, run:
 - Preserve the neutral Table Arranger Control shell identity for compatibility with Asian Hand Converter and similar software.
 - Keep the executable, window, and tray icon blue with a spade silhouette and a centered white plus.
 - Launch release builds as administrator through the embedded manifest.
-- Keep the panel compact and modern: a short horizontal toolbar, spatial poker-table tiles, a separate ordinary-window area, fixed contextual controls, and all secondary controls/status in Settings.
+- Keep the panel compact and modern: a short horizontal toolbar, a scaled desktop-proportional poker mirror with labeled placeholders, parked ghosts, and interactive named parked miniatures; a separate ordinary-window area with matching vector controls; and all secondary controls/status in Settings.
+- Open Settings as a separate compact native window that remains fully visible when its hotkey section is expanded and does not inflate or obscure the main workspace.
 - Keep the workspace visually structured and space-efficient: start poker and ordinary-window cards directly below the toolbar, omit section descriptions, separate active poker tables from parked and ignored poker windows with spacing and a divider, and automatically shrink panel height when fewer rows are visible without clipping the final row.
-- Cap layouts below four active tables at the four-table cell size: two occupy the top row and three add the bottom-left slot.
-- Above four active tables, retain 1–2 across the first top row and 3–4 below them; place 5 above 6 in the next column and 7 above 8 in the following column.
+- Number ClubGG geometry down each column: 1 above 2, 3 above 4, and 5 above 6. Leave the lower half of an odd final ClubGG column empty.
+- Place LDPlayer columns after ClubGG by default. A manual mixed swap exchanges one LDPlayer column with the selected ClubGG pair or single-plus-empty column.
 - Discover ordinary open application windows and default them to Ignore. Let the user change the global default to Ignore, Top-right, or Fill-space in Settings, while persistent per-window choices override it and ordinary windows never join the poker grid.
 - Keep Fill-space application windows strictly to the right of active poker tables for every table count, including one or two; never choose a larger empty band underneath the tables.
-- Reserve the poker width of two slots for Fill-space applications by default even when zero or one table is open; remember the user's 2 Slots switch choice across restarts.
-- Remember ordinary-window behavior across restarts even when its title changes, and remember table order after click-to-swap reordering.
+- Preserve up to a two-column total poker footprint for Fill-space applications and mirrored Placeholders by default while fewer than two active columns are occupied; LDPlayer consumes that footprint, preservation is inactive at two or more active columns, and manual Off plus spatial assignments survive restart.
+- Remember ordinary-window behavior across restarts even when its title changes, and remember poker column/slot assignments after click-to-swap or placeholder moves.
 - Keep every primary toolbar action visible without overlap and avoid decorative glyphs that are missing from the bundled font.
 - Make Locate restore and raise the chosen window so it is visible above windows that were covering it; requesting foreground focus is expected for this explicit action.
 - Keep idle RAM, GPU-memory, and CPU use proportionate to a compact control utility without weakening window-event responsiveness.
