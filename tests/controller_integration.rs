@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -25,6 +26,7 @@ struct MockBackend {
     located: Arc<Mutex<Vec<WindowId>>>,
     foreground: Arc<Mutex<Option<WindowId>>>,
     deny_moves: Arc<AtomicBool>,
+    minimum_sizes: Arc<Mutex<HashMap<WindowId, Size>>>,
 }
 
 impl MockBackend {
@@ -36,6 +38,7 @@ impl MockBackend {
             located: Arc::new(Mutex::new(Vec::new())),
             foreground: Arc::new(Mutex::new(None)),
             deny_moves: Arc::new(AtomicBool::new(false)),
+            minimum_sizes: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -62,8 +65,14 @@ impl WindowBackend for MockBackend {
         Ok(rect)
     }
 
-    fn minimum_size(&self, _id: WindowId, _aspect_ratio: f64) -> Result<Size, BackendError> {
-        Ok(Size::new(240, 180))
+    fn minimum_size(&self, id: WindowId, _aspect_ratio: f64) -> Result<Size, BackendError> {
+        Ok(self
+            .minimum_sizes
+            .lock()
+            .unwrap()
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| Size::new(240, 180)))
     }
 
     fn locate(&self, id: WindowId) -> Result<(), BackendError> {
@@ -93,6 +102,60 @@ fn locate_command_reaches_the_selected_window() {
     }
 
     assert_eq!(backend.located.lock().unwrap().as_slice(), [WindowId(1)]);
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
+fn identical_table_signatures_resolve_to_distinct_windows_and_slots() {
+    let backend = MockBackend::with_tables(3);
+    {
+        let mut candidates = backend.candidates.lock().unwrap();
+        candidates[1].signature = candidates[0].signature.clone();
+        candidates[1].label = candidates[0].label.clone();
+    }
+    let store = ConfigStore::at(temp_config_path("duplicate-table-signatures"));
+    let config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store);
+    let initial = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 3);
+    let occupants: std::collections::HashSet<_> = initial
+        .poker_slots
+        .iter()
+        .filter_map(|slot| slot.occupant)
+        .collect();
+    assert_eq!(occupants.len(), 3);
+
+    backend.moves.lock().unwrap().clear();
+    handle
+        .commands
+        .send(ControllerCommand::ForceArrange)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while backend.moves.lock().unwrap().len() < 3 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let moves = backend.moves.lock().unwrap().clone();
+    assert_eq!(moves.len(), 3);
+    assert_eq!(
+        moves
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<std::collections::HashSet<_>>(),
+        std::collections::HashSet::from([WindowId(1), WindowId(2), WindowId(3)])
+    );
+    for (index, (_, left)) in moves.iter().enumerate() {
+        for (_, right) in &moves[index + 1..] {
+            assert!(
+                left.right() <= right.left
+                    || right.right() <= left.left
+                    || left.bottom() <= right.top
+                    || right.bottom() <= left.top
+            );
+        }
+    }
+
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
 
@@ -1083,6 +1146,63 @@ fn ordinary_windows_default_to_ignore_and_can_use_free_space_or_top_right() {
         .commands
         .send(ControllerCommand::Shutdown)
         .unwrap();
+}
+
+#[test]
+fn fill_space_obeys_the_poker_border_even_when_narrower_than_its_minimum() {
+    let backend = MockBackend::with_tables(5);
+    let application = ordinary_candidate(20);
+    backend.candidates.lock().unwrap().push(application.clone());
+    backend
+        .minimum_sizes
+        .lock()
+        .unwrap()
+        .insert(WindowId(20), Size::new(700, 500));
+    let store = ConfigStore::at(temp_config_path("fill-space-obeys-poker-border"));
+    let mut config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    config.set_application_disposition(
+        application.signature,
+        clubgg_table_arranger::model::CandidateDisposition::FreeSpace,
+    );
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store);
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot.tables.len() == 5 && candidate_mode(snapshot, 20) == WindowMode::FreeSpace
+    });
+
+    backend.moves.lock().unwrap().clear();
+    handle
+        .commands
+        .send(ControllerCommand::ForceArrange)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !backend
+        .moves
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(id, _)| *id == WindowId(20))
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let moves = backend.moves.lock().unwrap().clone();
+    let application_rect = moves
+        .iter()
+        .find_map(|(id, rect)| (*id == WindowId(20)).then_some(*rect))
+        .expect("Fill-space application should be positioned");
+    assert_eq!(application_rect, Rect::new(2208, 0, 544, 1104));
+    assert!(application_rect.width < 700);
+    assert!(
+        moves
+            .iter()
+            .filter(|(id, _)| id.0 <= 5)
+            .all(|(_, rect)| rect.right() <= application_rect.left)
+    );
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
 
 #[test]

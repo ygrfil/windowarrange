@@ -641,37 +641,24 @@ impl Controller {
 
     fn sync_poker_columns(&mut self) -> bool {
         let before = self.config.poker_columns.clone();
-        let live: HashMap<_, _> = self
-            .tables
-            .iter()
-            .map(|table| (table.signature.clone(), table.poker_client))
+        let mut live_counts = HashMap::new();
+        for table in &self.tables {
+            *live_counts
+                .entry((table.signature.clone(), table.poker_client))
+                .or_insert(0_usize) += 1;
+        }
+        let saved_slots: Vec<_> = signature_slots(&self.config.poker_columns)
+            .into_iter()
+            .map(|(slot, signature)| (slot, signature.clone()))
             .collect();
-
-        for column in &mut self.config.poker_columns {
-            match column {
-                PokerColumnAssignment::ClubGg { top, bottom } => {
-                    if top
-                        .as_ref()
-                        .is_some_and(|signature| !live.contains_key(signature))
-                    {
-                        *top = None;
-                    }
-                    if bottom
-                        .as_ref()
-                        .is_some_and(|signature| !live.contains_key(signature))
-                    {
-                        *bottom = None;
-                    }
-                }
-                PokerColumnAssignment::LdPlayer { table } => {
-                    if table
-                        .as_ref()
-                        .is_some_and(|signature| !live.contains_key(signature))
-                    {
-                        *column = PokerColumnAssignment::Empty;
-                    }
-                }
-                PokerColumnAssignment::Empty => {}
+        for (slot, signature) in saved_slots {
+            let remaining = live_counts
+                .entry((signature, slot_client(slot)))
+                .or_insert(0);
+            if *remaining > 0 {
+                *remaining -= 1;
+            } else {
+                clear_slot(&mut self.config.poker_columns, slot);
             }
         }
 
@@ -683,26 +670,29 @@ impl Controller {
                     .poker_columns
                     .push(PokerColumnAssignment::empty_club());
             }
-            let mut assigned: HashSet<_> = self
-                .config
-                .poker_columns
-                .iter()
-                .flat_map(column_signatures)
-                .cloned()
-                .collect();
-            let mut pending: Vec<_> = self
-                .tables
-                .iter()
-                .filter(|table| !assigned.contains(&table.signature))
-                .map(|table| (table.signature.clone(), table.poker_client))
-                .collect();
+            let mut assigned_counts = HashMap::new();
+            for (slot, signature) in signature_slots(&self.config.poker_columns) {
+                *assigned_counts
+                    .entry((signature.clone(), slot_client(slot)))
+                    .or_insert(0_usize) += 1;
+            }
+            let mut pending = Vec::new();
+            for table in &self.tables {
+                let remaining = assigned_counts
+                    .entry((table.signature.clone(), table.poker_client))
+                    .or_insert(0);
+                if *remaining > 0 {
+                    *remaining -= 1;
+                } else {
+                    pending.push((table.signature.clone(), table.poker_client));
+                }
+            }
             pending.sort_by_key(|(_, client)| match client {
                 PokerClientKind::ClubGg => 0_u8,
                 PokerClientKind::LdPlayer => 1_u8,
             });
             for (signature, client) in pending {
-                assign_new_signature(&mut self.config.poker_columns, signature.clone(), client);
-                assigned.insert(signature);
+                assign_new_signature(&mut self.config.poker_columns, signature, client);
             }
             normalize_preserved_columns(&mut self.config.poker_columns);
         }
@@ -717,32 +707,32 @@ impl Controller {
     }
 
     fn sort_tables_by_columns(&mut self) {
-        let order: HashMap<_, _> = self
-            .config
-            .poker_columns
-            .iter()
-            .flat_map(column_signatures)
-            .cloned()
+        let resolved = resolved_slot_table_indices(&self.config.poker_columns, &self.tables);
+        let rank_by_id: HashMap<_, _> = signature_slots(&self.config.poker_columns)
+            .into_iter()
             .enumerate()
-            .map(|(index, signature)| (signature, index))
+            .filter_map(|(rank, (slot, _))| {
+                resolved
+                    .get(&slot)
+                    .map(|index| (self.tables[*index].id, rank))
+            })
             .collect();
         self.tables.sort_by_key(|table| {
-            order
-                .get(&table.signature)
-                .map_or((1_u8, usize::MAX), |index| (0_u8, *index))
+            rank_by_id
+                .get(&table.id)
+                .map_or((1_u8, usize::MAX), |rank| (0_u8, *rank))
         });
     }
 
     fn release_slot_for(&mut self, id: WindowId) {
-        let Some(signature) = self
-            .tables
-            .iter()
-            .find(|table| table.id == id)
-            .map(|table| table.signature.clone())
+        let resolved = resolved_slot_table_indices(&self.config.poker_columns, &self.tables);
+        let Some(slot) = resolved
+            .into_iter()
+            .find_map(|(slot, index)| (self.tables[index].id == id).then_some(slot))
         else {
             return;
         };
-        clear_signature(&mut self.config.poker_columns, &signature);
+        clear_slot(&mut self.config.poker_columns, slot);
     }
 
     fn move_to_slot(&mut self, source: WindowId, destination: PokerSlotId) -> bool {
@@ -751,7 +741,10 @@ impl Controller {
         };
         let source_signature = source_table.signature.clone();
         let source_client = source_table.poker_client;
-        let Some(source_slot) = find_signature_slot(&self.config.poker_columns, &source_signature)
+        let resolved = resolved_slot_table_indices(&self.config.poker_columns, &self.tables);
+        let Some(source_slot) = resolved
+            .iter()
+            .find_map(|(slot, index)| (self.tables[*index].id == source).then_some(*slot))
         else {
             return false;
         };
@@ -759,13 +752,9 @@ impl Controller {
             return false;
         }
 
-        let destination_client = signature_at_slot(&self.config.poker_columns, destination)
-            .and_then(|signature| {
-                self.tables
-                    .iter()
-                    .find(|table| &table.signature == signature)
-                    .map(|table| table.poker_client)
-            });
+        let destination_client = resolved
+            .get(&destination)
+            .map(|index| self.tables[*index].poker_client);
         let whole_column = source_client == PokerClientKind::LdPlayer
             || destination_client == Some(PokerClientKind::LdPlayer)
             || destination.row.is_none();
@@ -807,17 +796,11 @@ impl Controller {
     }
 
     fn occupied_active_column_count(&self) -> usize {
-        let enabled: HashSet<_> = self
-            .tables
-            .iter()
-            .filter(|table| table.enabled)
-            .map(|table| &table.signature)
-            .collect();
-        self.config
-            .poker_columns
-            .iter()
-            .filter(|column| column_signatures(column).any(|signature| enabled.contains(signature)))
-            .count()
+        resolved_slot_table_indices(&self.config.poker_columns, &self.tables)
+            .into_iter()
+            .filter_map(|(slot, index)| self.tables[index].enabled.then_some(slot.column))
+            .collect::<HashSet<_>>()
+            .len()
     }
 
     fn mixed_layout_for(
@@ -825,17 +808,16 @@ impl Controller {
         monitor: &MonitorInfo,
         columns: &[PokerColumnAssignment],
     ) -> crate::layout::MixedPokerLayout {
+        let resolved = resolved_slot_table_indices(columns, &self.tables);
         let specs: Vec<_> = columns
             .iter()
-            .map(|column| match column {
-                PokerColumnAssignment::LdPlayer {
-                    table: Some(signature),
-                } => {
+            .enumerate()
+            .map(|(column_index, column)| match column {
+                PokerColumnAssignment::LdPlayer { table: Some(_) } => {
                     let ratio = normalized_ldplayer_aspect_ratio(
-                        self.tables
-                            .iter()
-                            .find(|item| &item.signature == signature)
-                            .map_or(0.0, |item| item.preferred_aspect_ratio),
+                        resolved
+                            .get(&PokerSlotId::full_height(column_index))
+                            .map_or(0.0, |index| self.tables[*index].preferred_aspect_ratio),
                     );
                     PokerColumnSpec::LdPlayer {
                         aspect_ratio: ratio,
@@ -867,6 +849,7 @@ impl Controller {
         };
         let columns = self.runtime_columns();
         let layout = self.mixed_layout_for(&monitor, &columns);
+        let resolved = resolved_slot_table_indices(&columns, &self.tables);
         let enabled_count = self.tables.iter().filter(|table| table.enabled).count();
         info!(
             "arrangement started; active_tables={}; columns={}; height={}",
@@ -881,17 +864,29 @@ impl Controller {
                 continue;
             };
             match assignment {
-                PokerColumnAssignment::ClubGg { top, bottom } => {
-                    if let (Some(signature), Some(rect)) = (top, column_layout.top) {
-                        requests.push((signature.clone(), rect));
+                PokerColumnAssignment::ClubGg { .. } => {
+                    if let (Some(index), Some(rect)) = (
+                        resolved.get(&PokerSlotId::club(column_index, 0)),
+                        column_layout.top,
+                    ) && self.tables[*index].enabled
+                    {
+                        requests.push((*index, rect));
                     }
-                    if let (Some(signature), Some(rect)) = (bottom, column_layout.bottom) {
-                        requests.push((signature.clone(), rect));
+                    if let (Some(index), Some(rect)) = (
+                        resolved.get(&PokerSlotId::club(column_index, 1)),
+                        column_layout.bottom,
+                    ) && self.tables[*index].enabled
+                    {
+                        requests.push((*index, rect));
                     }
                 }
-                PokerColumnAssignment::LdPlayer {
-                    table: Some(signature),
-                } => requests.push((signature.clone(), column_layout.bounds)),
+                PokerColumnAssignment::LdPlayer { table: Some(_) } => {
+                    if let Some(index) = resolved.get(&PokerSlotId::full_height(column_index))
+                        && self.tables[*index].enabled
+                    {
+                        requests.push((*index, column_layout.bounds));
+                    }
+                }
                 PokerColumnAssignment::LdPlayer { table: None } | PokerColumnAssignment::Empty => {}
             }
         }
@@ -899,14 +894,7 @@ impl Controller {
         let mut moved_count = 0_usize;
         let mut failed_count = 0_usize;
         let mut access_denied_count = 0_usize;
-        for (slot, (signature, requested)) in requests.into_iter().enumerate() {
-            let Some(index) = self
-                .tables
-                .iter()
-                .position(|table| table.signature == signature && table.enabled)
-            else {
-                continue;
-            };
+        for (slot, (index, requested)) in requests.into_iter().enumerate() {
             let ratio = self.tables[index].preferred_aspect_ratio;
             if let Ok(minimum) = self.backend.minimum_size(self.tables[index].id, ratio)
                 && (requested.width < minimum.width || requested.height < minimum.height)
@@ -1021,30 +1009,19 @@ impl Controller {
                         height,
                     )
                 }
-                WindowMode::FreeSpace => {
-                    let current_ratio = current_rect.aspect_ratio().unwrap_or(DEFAULT_ASPECT_RATIO);
-                    let minimum = self
-                        .backend
-                        .minimum_size(*id, current_ratio)
-                        .unwrap_or_else(|_| crate::model::Size::new(240, 180));
-                    if free_rect.width < minimum.width || free_rect.height < minimum.height {
-                        self.window_statuses.insert(
-                            *id,
-                            TableStatus::MoveFailed(
-                                "No usable space remains to the right of active poker tables"
-                                    .to_owned(),
-                            ),
-                        );
-                        failed += 1;
-                        continue;
-                    }
-                    free_rect
-                }
+                WindowMode::FreeSpace => free_rect,
                 WindowMode::Arranged | WindowMode::Parked | WindowMode::Ignored => continue,
             };
 
             match self.backend.move_resize(*id, requested) {
-                Ok(_) => {
+                Ok(actual) => {
+                    if let Some(candidate) = self
+                        .candidates
+                        .iter_mut()
+                        .find(|candidate| candidate.id == *id)
+                    {
+                        candidate.rect = actual;
+                    }
                     self.window_statuses.insert(*id, TableStatus::Ready);
                     moved += 1;
                 }
@@ -1180,6 +1157,7 @@ impl Controller {
         };
         let columns = self.runtime_columns();
         let layout = self.mixed_layout_for(monitor, &columns);
+        let resolved = resolved_slot_table_indices(&columns, &self.tables);
         let mut views = Vec::new();
         for (column_index, assignment) in columns.iter().enumerate() {
             let Some(column_layout) = layout.columns.get(column_index) else {
@@ -1191,14 +1169,13 @@ impl Controller {
                         (0, top.as_ref(), column_layout.top),
                         (1, bottom.as_ref(), column_layout.bottom),
                     ] {
-                        let occupant = signature.and_then(|signature| {
-                            self.tables
-                                .iter()
-                                .find(|table| &table.signature == signature)
-                        });
+                        let slot = PokerSlotId::club(column_index, row);
+                        let occupant = signature
+                            .and_then(|_| resolved.get(&slot))
+                            .map(|index| &self.tables[*index]);
                         if let Some(rect) = rect {
                             views.push(PokerSlotView {
-                                id: PokerSlotId::club(column_index, row),
+                                id: slot,
                                 rect,
                                 occupant: occupant.map(|table| table.id),
                                 parked: occupant.is_some_and(|table| !table.enabled),
@@ -1207,11 +1184,13 @@ impl Controller {
                     }
                 }
                 PokerColumnAssignment::LdPlayer { table } => {
-                    let occupant = table.as_ref().and_then(|signature| {
-                        self.tables.iter().find(|item| &item.signature == signature)
-                    });
+                    let slot = PokerSlotId::full_height(column_index);
+                    let occupant = table
+                        .as_ref()
+                        .and_then(|_| resolved.get(&slot))
+                        .map(|index| &self.tables[*index]);
                     views.push(PokerSlotView {
-                        id: PokerSlotId::full_height(column_index),
+                        id: slot,
                         rect: column_layout.bounds,
                         occupant: occupant.map(|table| table.id),
                         parked: occupant.is_some_and(|table| !table.enabled),
@@ -1360,29 +1339,38 @@ fn active_assigned_columns(
     columns: &[PokerColumnAssignment],
     tables: &[ManagedTable],
 ) -> Vec<PokerColumnAssignment> {
-    let enabled: HashSet<_> = tables
-        .iter()
-        .filter(|table| table.enabled)
-        .map(|table| &table.signature)
-        .collect();
+    let resolved = resolved_slot_table_indices(columns, tables);
     columns
         .iter()
-        .filter_map(|column| match column {
+        .enumerate()
+        .filter_map(|(column_index, column)| match column {
             PokerColumnAssignment::ClubGg { top, bottom } => {
                 let top = top
                     .as_ref()
-                    .filter(|signature| enabled.contains(signature))
+                    .filter(|_| {
+                        resolved
+                            .get(&PokerSlotId::club(column_index, 0))
+                            .is_some_and(|index| tables[*index].enabled)
+                    })
                     .cloned();
                 let bottom = bottom
                     .as_ref()
-                    .filter(|signature| enabled.contains(signature))
+                    .filter(|_| {
+                        resolved
+                            .get(&PokerSlotId::club(column_index, 1))
+                            .is_some_and(|index| tables[*index].enabled)
+                    })
                     .cloned();
                 (top.is_some() || bottom.is_some())
                     .then_some(PokerColumnAssignment::ClubGg { top, bottom })
             }
             PokerColumnAssignment::LdPlayer { table } => table
                 .as_ref()
-                .filter(|signature| enabled.contains(signature))
+                .filter(|_| {
+                    resolved
+                        .get(&PokerSlotId::full_height(column_index))
+                        .is_some_and(|index| tables[*index].enabled)
+                })
                 .cloned()
                 .map(|table| PokerColumnAssignment::LdPlayer { table: Some(table) }),
             PokerColumnAssignment::Empty => None,
@@ -1401,6 +1389,55 @@ fn column_signatures(column: &PokerColumnAssignment) -> impl Iterator<Item = &Wi
         PokerColumnAssignment::Empty => {}
     }
     signatures.into_iter().flatten()
+}
+
+fn signature_slots(columns: &[PokerColumnAssignment]) -> Vec<(PokerSlotId, &WindowSignature)> {
+    let mut slots = Vec::new();
+    for (column, assignment) in columns.iter().enumerate() {
+        match assignment {
+            PokerColumnAssignment::ClubGg { top, bottom } => {
+                if let Some(signature) = top {
+                    slots.push((PokerSlotId::club(column, 0), signature));
+                }
+                if let Some(signature) = bottom {
+                    slots.push((PokerSlotId::club(column, 1), signature));
+                }
+            }
+            PokerColumnAssignment::LdPlayer {
+                table: Some(signature),
+            } => slots.push((PokerSlotId::full_height(column), signature)),
+            PokerColumnAssignment::LdPlayer { table: None } | PokerColumnAssignment::Empty => {}
+        }
+    }
+    slots
+}
+
+fn slot_client(slot: PokerSlotId) -> PokerClientKind {
+    if slot.row.is_none() {
+        PokerClientKind::LdPlayer
+    } else {
+        PokerClientKind::ClubGg
+    }
+}
+
+fn resolved_slot_table_indices(
+    columns: &[PokerColumnAssignment],
+    tables: &[ManagedTable],
+) -> HashMap<PokerSlotId, usize> {
+    let mut used = HashSet::new();
+    let mut resolved = HashMap::new();
+    for (slot, signature) in signature_slots(columns) {
+        let expected_client = slot_client(slot);
+        if let Some((index, table)) = tables.iter().enumerate().find(|(_, table)| {
+            table.signature == *signature
+                && table.poker_client == expected_client
+                && !used.contains(&table.id)
+        }) {
+            used.insert(table.id);
+            resolved.insert(slot, index);
+        }
+    }
+    resolved
 }
 
 fn assign_new_signature(
@@ -1493,29 +1530,6 @@ fn column_is_owned(column: &PokerColumnAssignment) -> bool {
     column_signatures(column).next().is_some()
 }
 
-fn find_signature_slot(
-    columns: &[PokerColumnAssignment],
-    signature: &WindowSignature,
-) -> Option<PokerSlotId> {
-    columns
-        .iter()
-        .enumerate()
-        .find_map(|(column, assignment)| match assignment {
-            PokerColumnAssignment::ClubGg { top, bottom } if top.as_ref() == Some(signature) => {
-                Some(PokerSlotId::club(column, 0))
-            }
-            PokerColumnAssignment::ClubGg { top: _, bottom }
-                if bottom.as_ref() == Some(signature) =>
-            {
-                Some(PokerSlotId::club(column, 1))
-            }
-            PokerColumnAssignment::LdPlayer { table } if table.as_ref() == Some(signature) => {
-                Some(PokerSlotId::full_height(column))
-            }
-            _ => None,
-        })
-}
-
 fn signature_at_slot(
     columns: &[PokerColumnAssignment],
     slot: PokerSlotId,
@@ -1560,14 +1574,12 @@ fn set_slot_signature(
     }
 }
 
-fn clear_signature(columns: &mut [PokerColumnAssignment], signature: &WindowSignature) {
-    if let Some(slot) = find_signature_slot(columns, signature) {
-        set_slot_signature(columns, slot, None);
-        if matches!(
-            columns[slot.column],
-            PokerColumnAssignment::LdPlayer { table: None }
-        ) {
-            columns[slot.column] = PokerColumnAssignment::Empty;
-        }
+fn clear_slot(columns: &mut [PokerColumnAssignment], slot: PokerSlotId) {
+    set_slot_signature(columns, slot, None);
+    if matches!(
+        columns.get(slot.column),
+        Some(PokerColumnAssignment::LdPlayer { table: None })
+    ) {
+        columns[slot.column] = PokerColumnAssignment::Empty;
     }
 }

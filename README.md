@@ -11,17 +11,17 @@ A Windows-only companion that arranges independently movable ClubGG and LDPlayer
 5. Select one poker tile and then another occupied slot to swap them. A ClubGG/LDPlayer swap moves the whole ClubGG pair. Select a table and then a dashed empty placeholder to move it while preserving the old hole.
 6. Leave **Preserve table slots** enabled to retain holes and parked reservations inside a maximum two-column reserved footprint. LDPlayer consumes an available reserved column instead of being appended after it. Preservation becomes inactive when two or more active columns already occupy the footprint, then returns below two; its preference remains clickable, and a manual Off choice remains off.
 7. Parked tables move to their actual minimum sizes along the display's bottom-right. Their active positions remain as orange ghosts while preservation is enabled. On the miniature real parked table, left-click locates it and right-click unparks it.
-8. Ordinary windows remain separate and default to Ignore. Choose Top-right to preserve size at the corner or Fill space to occupy only the full-height strip to the right of the poker layout.
+8. Ordinary windows remain separate and default to Ignore. Choose Top-right to preserve size at the corner or Fill space to force the window into only the full-height strip remaining to the right after poker is laid out.
 
 The mirrored board scales the selected monitor's working area into the compact panel. Active table tiles, muted numbered **Placeholders** targets, parked ghosts, and named actual parked miniatures retain their desktop-relative positions. All ClubGG lobby windows are summarized by one count card directly below the mirror and default to Park; its controls affect every lobby together. Clicking **Locate one by one** runs the same ordinary Locate action for each lobby sequentially, raising it exactly where it is parked without resizing, repositioning, or changing its saved Park setting. Lobbies never consume table slots or preserved space, and multiple parked lobbies line up shoulder-to-shoulder with the parked tables. Ignored poker windows remain accessible in the compact unmanaged row.
 
-All dispositions, spatial slots, manual holes, monitor choice, hotkeys, and ordinary-window rules are remembered. Closing or ignoring a poker window releases its signature from the slot immediately; with preservation enabled, the position remains as an anonymous empty target for another table.
+All dispositions, spatial slots, manual holes, monitor choice, hotkeys, and ordinary-window rules are remembered. Identical displayed poker names are treated as separate live windows and retain separate slots. Closing or ignoring a poker window releases its assigned occurrence from the slot immediately; with preservation enabled, the position remains as an anonymous empty target for another table.
 
 **Arrange** discovers current windows and immediately reapplies every selected placement even when Auto is off. Enabling **Auto** also immediately applies poker and ordinary-window placement. Native discovery events use a 200 ms trailing debounce.
 
 Mixed columns use the monitor's full working height when they fit. LDPlayer keeps at least Pokerrr 2's natural 9:16 portrait ratio and retains any wider detected ratio, so repeated Auto reflows cannot make it progressively narrower. When several columns no longer fit, the layout reduces their shared height while preserving ratios and preventing overlap.
 
-**Fill space** never uses a band below poker tables. It begins at the right edge of the actual or preserved poker-column footprint and extends to the selected monitor's right edge. Multiple Fill-space applications share that rectangle.
+**Fill space** gives poker priority. Poker geometry is calculated first, then the application is resized into the exact remaining full-height strip from the actual or preserved poker-column boundary to the selected monitor's right edge—even when that strip is narrower than the application's reported minimum size. It never remains overlapping poker or uses a band below it. Multiple Fill-space applications share that rectangle.
 
 Default shortcuts:
 
