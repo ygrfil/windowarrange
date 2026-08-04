@@ -151,6 +151,8 @@ pub struct WindowCandidate {
     pub signature: WindowSignature,
     pub rect: Rect,
     pub poker_client: Option<PokerClientKind>,
+    /// A ClubGG shell/lobby window, never a numbered poker-table slot.
+    pub is_clubgg_lobby: bool,
     pub preferred_aspect_ratio: f64,
     pub likely_table: bool,
 }
@@ -202,6 +204,7 @@ pub struct CandidateView {
     pub process_name: String,
     pub class_name: String,
     pub poker_client: Option<PokerClientKind>,
+    pub is_clubgg_lobby: bool,
     pub current_rect: Rect,
     pub likely_table: bool,
     pub mode: WindowMode,

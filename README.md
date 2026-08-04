@@ -13,13 +13,13 @@ A Windows-only companion that arranges independently movable ClubGG and LDPlayer
 7. Parked tables move to their actual minimum sizes along the display's bottom-right. Their active positions remain as orange ghosts while preservation is enabled. On the miniature real parked table, left-click locates it and right-click unparks it.
 8. Ordinary windows remain separate and default to Ignore. Choose Top-right to preserve size at the corner or Fill space to occupy only the full-height strip to the right of the poker layout.
 
-The mirrored board scales the selected monitor's working area into the compact panel. Active table tiles, muted numbered **Placeholders** targets, parked ghosts, and named actual parked miniatures retain their desktop-relative positions. Generic ClubGG shell surfaces are excluded so they cannot masquerade as table placeholders. Ignored poker windows remain accessible in a compact unmanaged row.
+The mirrored board scales the selected monitor's working area into the compact panel. Active table tiles, muted numbered **Placeholders** targets, parked ghosts, and named actual parked miniatures retain their desktop-relative positions. ClubGG lobby windows appear separately in the right-side **ClubGG lobbies** group and default to Park. They never consume table slots or preserved space, and multiple parked lobbies line up shoulder-to-shoulder with the parked tables. Ignored poker windows remain accessible in the compact unmanaged row.
 
 All dispositions, spatial slots, manual holes, monitor choice, hotkeys, and ordinary-window rules are remembered. Closing or ignoring a poker window releases its signature from the slot immediately; with preservation enabled, the position remains as an anonymous empty target for another table.
 
 **Arrange** discovers current windows and immediately reapplies every selected placement even when Auto is off. Enabling **Auto** also immediately applies poker and ordinary-window placement. Native discovery events use a 200 ms trailing debounce.
 
-Mixed columns use the monitor's full working height when they fit. When several ClubGG and LDPlayer columns become too wide, the layout reduces their shared height while preserving each client's aspect ratio and preventing overlap.
+Mixed columns use the monitor's full working height when they fit. LDPlayer keeps at least Pokerrr 2's natural 9:16 portrait ratio and retains any wider detected ratio, so repeated Auto reflows cannot make it progressively narrower. When several columns no longer fit, the layout reduces their shared height while preserving ratios and preventing overlap.
 
 **Fill space** never uses a band below poker tables. It begins at the right edge of the actual or preserved poker-column footprint and extends to the selected monitor's right edge. Multiple Fill-space applications share that rectangle.
 

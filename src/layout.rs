@@ -1,6 +1,16 @@
 use crate::model::Rect;
 
 pub const DEFAULT_ASPECT_RATIO: f64 = 4.0 / 3.0;
+pub const LDPLAYER_NATURAL_ASPECT_RATIO: f64 = 9.0 / 16.0;
+
+#[must_use]
+pub fn normalized_ldplayer_aspect_ratio(detected: f64) -> f64 {
+    if detected.is_finite() && detected > 0.0 {
+        detected.max(LDPLAYER_NATURAL_ASPECT_RATIO)
+    } else {
+        LDPLAYER_NATURAL_ASPECT_RATIO
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PokerColumnSpec {
@@ -278,6 +288,13 @@ mod tests {
         assert!(ldplayer.top.is_none() && ldplayer.bottom.is_none());
         assert_eq!(ldplayer.bounds.height, work.height);
         assert_eq!(ldplayer.bounds.left, layout.columns[1].bounds.right());
+    }
+
+    #[test]
+    fn ldplayer_ratio_keeps_the_natural_portrait_width_as_its_minimum() {
+        assert_eq!(normalized_ldplayer_aspect_ratio(0.50), 9.0 / 16.0);
+        assert_eq!(normalized_ldplayer_aspect_ratio(0.65), 0.65);
+        assert_eq!(normalized_ldplayer_aspect_ratio(f64::NAN), 9.0 / 16.0);
     }
 
     #[test]

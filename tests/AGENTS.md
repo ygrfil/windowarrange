@@ -27,9 +27,9 @@
 - UI and controller tests must cover table selection, same-table cancellation, the table-1-to-placeholder-2 move path, individual same-client swaps, whole ClubGG/LDPlayer column swaps, and Park ghost destinations.
 - Geometry tests must verify right-side-strip containment, full work-area height, non-overlap with active poker tables, and specifically that one or two tables never cause Fill space to select a bottom band.
 - Controller tests must verify that Preserve table slots defaults on, never adds anonymous geometry beyond two total columns, lets LDPlayer claim a reserved column, repairs the legacy middle-gap form, automatically suppresses at two or more active columns, remains manually editable, never overrides manual Off, and compacts immediately while Auto is off when manually disabled.
-- Win32 classification tests must reject untitled and exact-title `ClubGG` shell surfaces while retaining real table titles.
-- Controller tests must verify that parked tables use queried minimum sizes and line up from bottom-right toward the left without overlap.
-- Geometry tests must verify ClubGG top/bottom column order `(1/2)`, `(3/4)`, `(5/6)`, odd lower gaps, full-height aspect-preserving LDPlayer columns, shared-height shrinking, and non-overlap.
+- Win32 and controller tests must classify untitled, exact-title, and explicitly lobby-titled ClubGG surfaces as ancillary lobbies, default all of them to Park, retain every same-signature lobby in the separate UI group, exclude them from slots and preservation, and still recognize real table titles as likely tables.
+- Controller tests must verify that parked tables and lobbies use queried minimum sizes and line up from bottom-right toward the left without overlap.
+- Geometry and controller tests must verify ClubGG top/bottom column order `(1/2)`, `(3/4)`, `(5/6)`, odd lower gaps, full-height LDPlayer columns that never become narrower than 9:16, retention of wider detected LDPlayer ratios, repeated-reflow stability, shared-height shrinking, and non-overlap.
 - Unit tests must keep the outer shell identity free of `ClubGG` so third-party poker hooks do not target the arranger.
 - Unit tests must verify the shared icon retains its blue field, spade silhouette, and centered white plus.
 

@@ -13,7 +13,10 @@ use log::{info, warn};
 
 use crate::{
     config::{AppConfig, ApplicationDefault, ConfigStore, HotkeySettings},
-    layout::{DEFAULT_ASPECT_RATIO, PokerColumnSpec, calculate_mixed_layout, right_side_free_rect},
+    layout::{
+        DEFAULT_ASPECT_RATIO, PokerColumnSpec, calculate_mixed_layout,
+        normalized_ldplayer_aspect_ratio, right_side_free_rect,
+    },
     model::{
         BackendError, CandidateDisposition, CandidateView, ManagedTable, MonitorInfo,
         PokerClientKind, PokerColumnAssignment, PokerSlotId, PokerSlotView, Rect, TableStatus,
@@ -376,6 +379,11 @@ impl Controller {
         };
 
         let old_ids: HashSet<_> = self.tables.iter().map(|table| table.id).collect();
+        let old_candidate_ids: HashSet<_> = self
+            .candidates
+            .iter()
+            .map(|candidate| candidate.id)
+            .collect();
         let old_positioned_ids = self.positioned_window_ids();
         let candidate_by_id: HashMap<_, _> =
             candidates.iter().map(|item| (item.id, item)).collect();
@@ -399,15 +407,16 @@ impl Controller {
         let mut table_order_changed = false;
         for candidate in &candidates {
             let disposition = self.disposition_for_candidate(candidate);
-            let should_manage = match disposition {
-                Some(CandidateDisposition::Table | CandidateDisposition::Parked) => true,
-                Some(
-                    CandidateDisposition::TopRight
-                    | CandidateDisposition::FreeSpace
-                    | CandidateDisposition::Ignored,
-                ) => false,
-                None => candidate.likely_table,
-            };
+            let should_manage = !candidate.is_clubgg_lobby
+                && match disposition {
+                    Some(CandidateDisposition::Table | CandidateDisposition::Parked) => true,
+                    Some(
+                        CandidateDisposition::TopRight
+                        | CandidateDisposition::FreeSpace
+                        | CandidateDisposition::Ignored,
+                    ) => false,
+                    None => candidate.likely_table,
+                };
             let existing = self
                 .tables
                 .iter()
@@ -456,7 +465,10 @@ impl Controller {
         }
 
         let new_ids: HashSet<_> = self.tables.iter().map(|table| table.id).collect();
+        let new_candidate_ids: HashSet<_> =
+            candidates.iter().map(|candidate| candidate.id).collect();
         let table_set_changed = old_ids != new_ids;
+        let candidate_set_changed = old_candidate_ids != new_candidate_ids;
         let monitor_changed = self.monitors != monitors;
         self.candidates = candidates;
         self.monitors = monitors;
@@ -489,6 +501,7 @@ impl Controller {
 
         if table_set_changed
             || monitor_changed
+            || candidate_set_changed
             || self
                 .tables
                 .iter()
@@ -511,7 +524,9 @@ impl Controller {
             .candidates
             .iter()
             .filter(|candidate| {
-                candidate.likely_table || self.tables.iter().any(|table| table.id == candidate.id)
+                !candidate.is_clubgg_lobby
+                    && (candidate.likely_table
+                        || self.tables.iter().any(|table| table.id == candidate.id))
             })
             .count();
         let other_window_count = self.candidates.len().saturating_sub(poker_window_count);
@@ -542,12 +557,17 @@ impl Controller {
         &self,
         candidate: &WindowCandidate,
     ) -> Option<CandidateDisposition> {
-        self.config
-            .disposition_for(&candidate.signature)
-            .or_else(|| {
-                (candidate.poker_client.is_none())
-                    .then(|| self.config.default_application_mode.disposition())
-            })
+        let saved = self.config.disposition_for(&candidate.signature);
+        if candidate.is_clubgg_lobby {
+            return Some(match saved {
+                Some(CandidateDisposition::Table) | None => CandidateDisposition::Parked,
+                Some(disposition) => disposition,
+            });
+        }
+        saved.or_else(|| {
+            (candidate.poker_client.is_none())
+                .then(|| self.config.default_application_mode.disposition())
+        })
     }
 
     fn sync_poker_columns(&mut self) -> bool {
@@ -742,11 +762,12 @@ impl Controller {
                 PokerColumnAssignment::LdPlayer {
                     table: Some(signature),
                 } => {
-                    let ratio = self
-                        .tables
-                        .iter()
-                        .find(|item| &item.signature == signature)
-                        .map_or(DEFAULT_ASPECT_RATIO, |item| item.preferred_aspect_ratio);
+                    let ratio = normalized_ldplayer_aspect_ratio(
+                        self.tables
+                            .iter()
+                            .find(|item| &item.signature == signature)
+                            .map_or(0.0, |item| item.preferred_aspect_ratio),
+                    );
                     PokerColumnSpec::LdPlayer {
                         aspect_ratio: ratio,
                     }
@@ -977,23 +998,49 @@ impl Controller {
         let Some(monitor) = self.selected_monitor().cloned() else {
             return;
         };
-        let parked: Vec<_> = self
+        let parked_tables: Vec<_> = self
             .tables
             .iter()
             .enumerate()
             .filter_map(|(index, table)| (!table.enabled).then_some(index))
             .collect();
+        let parked_lobbies: Vec<_> = self
+            .candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| {
+                (candidate.is_clubgg_lobby
+                    && self.disposition_for_candidate(candidate)
+                        == Some(CandidateDisposition::Parked))
+                .then_some(index)
+            })
+            .collect();
+        let parked: Vec<_> = parked_tables
+            .into_iter()
+            .map(|index| (Some(index), None))
+            .chain(parked_lobbies.into_iter().map(|index| (None, Some(index))))
+            .collect();
         let mut cursor_right = monitor.work_area.right();
         let mut cursor_bottom = monitor.work_area.bottom();
         let mut row_height = 0_i32;
 
-        for index in parked {
-            let size = self
-                .backend
-                .minimum_size(
+        for (table_index, lobby_index) in parked {
+            let (id, aspect_ratio) = if let Some(index) = table_index {
+                (
                     self.tables[index].id,
                     self.tables[index].preferred_aspect_ratio,
                 )
+            } else if let Some(index) = lobby_index {
+                (
+                    self.candidates[index].id,
+                    self.candidates[index].preferred_aspect_ratio,
+                )
+            } else {
+                continue;
+            };
+            let size = self
+                .backend
+                .minimum_size(id, aspect_ratio)
                 .unwrap_or_else(|_| crate::model::Size::new(240, 180));
             let width = size.width.clamp(1, monitor.work_area.width);
             let height = size.height.clamp(1, monitor.work_area.height);
@@ -1010,20 +1057,34 @@ impl Controller {
                 width,
                 height,
             );
-            match self.backend.move_resize(self.tables[index].id, rect) {
+            match self.backend.move_resize(id, rect) {
                 Ok(actual) => {
-                    self.tables[index].status = TableStatus::Parked;
-                    self.tables[index].current_rect = actual;
+                    if let Some(index) = table_index {
+                        self.tables[index].status = TableStatus::Parked;
+                        self.tables[index].current_rect = actual;
+                    } else if let Some(index) = lobby_index {
+                        self.candidates[index].rect = actual;
+                        self.window_statuses.insert(id, TableStatus::Parked);
+                    }
                     cursor_right = actual.left;
                     row_height = row_height.max(actual.height);
                 }
                 Err(BackendError::AccessDenied) => {
-                    self.tables[index].status = TableStatus::AccessDenied;
+                    if let Some(index) = table_index {
+                        self.tables[index].status = TableStatus::AccessDenied;
+                    } else {
+                        self.window_statuses.insert(id, TableStatus::AccessDenied);
+                    }
                     cursor_right = rect.left;
                     row_height = row_height.max(height);
                 }
                 Err(error) => {
-                    self.tables[index].status = TableStatus::MoveFailed(error.to_string());
+                    let status = TableStatus::MoveFailed(error.to_string());
+                    if let Some(index) = table_index {
+                        self.tables[index].status = status;
+                    } else {
+                        self.window_statuses.insert(id, status);
+                    }
                     cursor_right = rect.left;
                     row_height = row_height.max(height);
                 }
@@ -1127,6 +1188,7 @@ impl Controller {
                 process_name: candidate.process_name.clone(),
                 class_name: candidate.class_name.clone(),
                 poker_client: candidate.poker_client,
+                is_clubgg_lobby: candidate.is_clubgg_lobby,
                 current_rect: self
                     .tables
                     .iter()
@@ -1139,6 +1201,7 @@ impl Controller {
                     .find(|table| table.id == candidate.id)
                     .map_or_else(
                         || match self.disposition_for_candidate(candidate) {
+                            Some(CandidateDisposition::Parked) => WindowMode::Parked,
                             Some(CandidateDisposition::TopRight) => WindowMode::TopRight,
                             Some(CandidateDisposition::FreeSpace) => WindowMode::FreeSpace,
                             _ => WindowMode::Ignored,

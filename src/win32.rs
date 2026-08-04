@@ -57,6 +57,7 @@ use windows::{
 use crate::{
     controller::ControllerCommand,
     identity::PANEL_TITLE,
+    layout::normalized_ldplayer_aspect_ratio,
     model::{
         BackendError, MonitorInfo, PokerClientKind, Rect, Size, WindowBackend, WindowCandidate,
         WindowId, WindowSignature,
@@ -476,9 +477,6 @@ fn inspect_window(
     }
 
     let lower_title = title.to_ascii_lowercase();
-    if belongs_to_clubgg && is_generic_clubgg_surface(&lower_title) {
-        return None;
-    }
     let utility_words = [
         "lobby",
         "cashier",
@@ -489,7 +487,8 @@ fn inspect_window(
         "support",
         "tournament lobby",
     ];
-    let looks_utility = utility_words.iter().any(|word| lower_title.contains(word));
+    let clubgg_lobby = belongs_to_clubgg && is_clubgg_lobby_surface(&lower_title);
+    let looks_utility = clubgg_lobby || utility_words.iter().any(|word| lower_title.contains(word));
     let ratio = rect.aspect_ratio().unwrap_or(0.0);
     let table_shape = (0.9..=2.1).contains(&ratio);
     let tool_window = ex_style & WS_EX_TOOLWINDOW.0 != 0;
@@ -508,7 +507,9 @@ fn inspect_window(
         Some(PokerClientKind::LdPlayer) => !looks_utility,
         None => false,
     };
-    let label = if title.trim().is_empty() {
+    let label = if clubgg_lobby {
+        "ClubGG lobby".to_owned()
+    } else if title.trim().is_empty() {
         format!("{process_name} window")
     } else {
         title
@@ -526,7 +527,12 @@ fn inspect_window(
         },
         rect,
         poker_client,
-        preferred_aspect_ratio: ratio,
+        is_clubgg_lobby: clubgg_lobby,
+        preferred_aspect_ratio: if poker_client == Some(PokerClientKind::LdPlayer) {
+            normalized_ldplayer_aspect_ratio(ratio)
+        } else {
+            ratio
+        },
         likely_table,
     })
 }
@@ -540,6 +546,10 @@ fn is_ldplayer_process(process_name: &str) -> bool {
 
 fn is_generic_clubgg_surface(title: &str) -> bool {
     matches!(title.trim().to_ascii_lowercase().as_str(), "" | "clubgg")
+}
+
+fn is_clubgg_lobby_surface(title: &str) -> bool {
+    is_generic_clubgg_surface(title) || title.to_ascii_lowercase().contains("lobby")
 }
 
 fn is_system_shell_window(class_name: &str) -> bool {
@@ -655,8 +665,8 @@ fn map_last_error(context: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_generic_clubgg_surface, is_ldplayer_process, is_system_shell_window,
-        normalize_title_pattern,
+        is_clubgg_lobby_surface, is_generic_clubgg_surface, is_ldplayer_process,
+        is_system_shell_window, normalize_title_pattern,
     };
 
     #[test]
@@ -683,9 +693,16 @@ mod tests {
     }
 
     #[test]
-    fn generic_clubgg_shell_titles_are_not_poker_tables() {
+    fn generic_clubgg_titles_identify_lobbies_not_tables() {
         assert!(is_generic_clubgg_surface(""));
         assert!(is_generic_clubgg_surface("  ClubGG  "));
         assert!(!is_generic_clubgg_surface("PLO5 10-20 - Table 2"));
+    }
+
+    #[test]
+    fn titled_clubgg_lobbies_are_identified_consistently() {
+        assert!(is_clubgg_lobby_surface("ClubGG lobby"));
+        assert!(is_clubgg_lobby_surface("Tournament Lobby - ClubGG"));
+        assert!(!is_clubgg_lobby_surface("PLO5 10-20 - Table 2"));
     }
 }

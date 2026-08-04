@@ -230,6 +230,56 @@ fn ldplayer_uses_a_full_height_column_and_cross_swap_moves_the_club_pair() {
 }
 
 #[test]
+fn full_height_ldplayer_never_reflows_narrower_than_its_natural_ratio() {
+    let backend = MockBackend::with_tables(0);
+    let mut ldplayer = ldplayer_candidate(9);
+    ldplayer.rect = Rect::new(0, 0, 500, 1104);
+    ldplayer.preferred_aspect_ratio = 0.50;
+    backend.candidates.lock().unwrap().push(ldplayer);
+    let store = ConfigStore::at(temp_config_path("natural-ldplayer-ratio"));
+    let config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store);
+    let snapshot = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 1);
+    let slot = snapshot
+        .poker_slots
+        .iter()
+        .find(|slot| slot.occupant == Some(WindowId(9)))
+        .unwrap();
+
+    assert_eq!(slot.rect.height, 1104);
+    assert_eq!(slot.rect.width, 621);
+
+    handle
+        .commands
+        .send(ControllerCommand::ForceArrange)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !backend
+        .moves
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(id, rect)| *id == WindowId(9) && rect.width == 621 && rect.height == 1104)
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        backend
+            .moves
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(id, rect)| *id == WindowId(9) && rect.width == 621 && rect.height == 1104)
+    );
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
 fn existing_ldplayer_assignment_reclaims_an_older_reserved_middle_column() {
     let backend = MockBackend::with_tables(1);
     let ldplayer = ldplayer_candidate(9);
@@ -744,6 +794,103 @@ fn every_candidate_exposes_arrange_park_and_ignore_state() {
 }
 
 #[test]
+fn saved_parked_clubgg_lobby_remains_visible_and_managed() {
+    let backend = MockBackend::with_tables(0);
+    let mut lobby = candidate(8);
+    lobby.label = "ClubGG lobby".to_owned();
+    lobby.signature.title_pattern = "clubgg".to_owned();
+    lobby.is_clubgg_lobby = true;
+    lobby.likely_table = false;
+    backend.candidates.lock().unwrap().push(lobby.clone());
+    let mut config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    config.set_disposition(
+        lobby.signature,
+        clubgg_table_arranger::model::CandidateDisposition::Parked,
+    );
+    let store = ConfigStore::at(temp_config_path("parked-clubgg-lobby-visible"));
+    let handle = spawn_controller(Arc::new(backend), config, store);
+    let snapshot = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        candidate_mode(snapshot, 8) == WindowMode::Parked
+    });
+
+    assert_eq!(snapshot.candidates[0].label, "ClubGG lobby");
+    assert!(snapshot.candidates[0].is_clubgg_lobby);
+    assert!(snapshot.tables.is_empty());
+    assert!(
+        snapshot
+            .poker_slots
+            .iter()
+            .all(|slot| slot.occupant.is_none())
+    );
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
+fn multiple_lobbies_default_to_park_without_consuming_preserved_columns() {
+    let backend = MockBackend::with_tables(1);
+    let shared_signature = WindowSignature {
+        process_name: "clubgg.exe".to_owned(),
+        class_name: "ClubGGLobby".to_owned(),
+        title_pattern: "clubgg lobby".to_owned(),
+    };
+    for id in 8..=10 {
+        let mut lobby = candidate(id);
+        lobby.label = "ClubGG lobby".to_owned();
+        lobby.signature.clone_from(&shared_signature);
+        lobby.is_clubgg_lobby = true;
+        lobby.likely_table = false;
+        backend.candidates.lock().unwrap().push(lobby);
+    }
+    let store = ConfigStore::at(temp_config_path("multiple-lobbies-no-poker-slots"));
+    let config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store);
+    let snapshot = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot.candidates.len() == 4
+            && snapshot
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.is_clubgg_lobby)
+                .all(|candidate| candidate.mode == WindowMode::Parked)
+    });
+
+    assert_eq!(snapshot.tables.len(), 1);
+    assert!(snapshot.preserve_table_slots);
+    assert_eq!(
+        snapshot.poker_slots.iter().map(|slot| slot.id.column).max(),
+        Some(1)
+    );
+    assert_eq!(
+        snapshot
+            .poker_slots
+            .iter()
+            .filter(|slot| slot.occupant.is_some())
+            .count(),
+        1
+    );
+
+    let moves = backend.moves.lock().unwrap();
+    let last_rect = |id| {
+        moves
+            .iter()
+            .rev()
+            .find(|(candidate, _)| *candidate == WindowId(id))
+            .map(|(_, rect)| *rect)
+    };
+    assert_eq!(last_rect(8), Some(Rect::new(2512, 924, 240, 180)));
+    assert_eq!(last_rect(9), Some(Rect::new(2272, 924, 240, 180)));
+    assert_eq!(last_rect(10), Some(Rect::new(2032, 924, 240, 180)));
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
 fn ordinary_windows_default_to_ignore_and_can_use_free_space_or_top_right() {
     let backend = MockBackend::with_tables(2);
     backend
@@ -1119,6 +1266,7 @@ fn candidate(number: usize) -> WindowCandidate {
         },
         rect: Rect::new(0, 0, 800, 600),
         poker_client: Some(PokerClientKind::ClubGg),
+        is_clubgg_lobby: false,
         preferred_aspect_ratio: 4.0 / 3.0,
         likely_table: true,
     }
@@ -1138,6 +1286,7 @@ fn ordinary_candidate(number: usize) -> WindowCandidate {
         },
         rect: Rect::new(100, 100, 900, 700),
         poker_client: None,
+        is_clubgg_lobby: false,
         preferred_aspect_ratio: 9.0 / 7.0,
         likely_table: false,
     }
@@ -1157,6 +1306,7 @@ fn ldplayer_candidate(number: usize) -> WindowCandidate {
         },
         rect: Rect::new(0, 0, 620, 1104),
         poker_client: Some(PokerClientKind::LdPlayer),
+        is_clubgg_lobby: false,
         preferred_aspect_ratio: 9.0 / 16.0,
         likely_table: true,
     }

@@ -372,7 +372,7 @@ impl TableArrangerApp {
             .snapshot
             .candidates
             .iter()
-            .filter(|window| window.poker_client.is_some())
+            .filter(|window| window.poker_client.is_some() && !window.is_clubgg_lobby)
             .cloned()
             .collect();
 
@@ -709,16 +709,24 @@ impl TableArrangerApp {
     }
 
     fn application_board(&mut self, ui: &mut egui::Ui) {
-        let mut windows: Vec<_> = self
+        let mut lobbies: Vec<_> = self
+            .snapshot
+            .candidates
+            .iter()
+            .filter(|window| window.is_clubgg_lobby)
+            .cloned()
+            .collect();
+        let mut applications: Vec<_> = self
             .snapshot
             .candidates
             .iter()
             .filter(|window| window.poker_client.is_none())
             .cloned()
             .collect();
-        windows.sort_by_key(|window| window_mode_rank(window.mode));
+        lobbies.sort_by_key(|window| window_mode_rank(window.mode));
+        applications.sort_by_key(|window| window_mode_rank(window.mode));
 
-        if windows.is_empty() {
+        if lobbies.is_empty() && applications.is_empty() {
             empty_section(
                 ui,
                 "No other windows",
@@ -727,6 +735,32 @@ impl TableArrangerApp {
             return;
         }
 
+        if !lobbies.is_empty() {
+            ui.label(
+                egui::RichText::new("ClubGG lobbies")
+                    .small()
+                    .strong()
+                    .color(ui.visuals().weak_text_color()),
+            );
+            self.application_grid(ui, &lobbies);
+        }
+        if !lobbies.is_empty() && !applications.is_empty() {
+            ui.add_space(2.0);
+            ui.separator();
+            ui.label(
+                egui::RichText::new("Other windows")
+                    .small()
+                    .strong()
+                    .color(ui.visuals().weak_text_color()),
+            );
+        }
+        self.application_grid(ui, &applications);
+    }
+
+    fn application_grid(&mut self, ui: &mut egui::Ui, windows: &[CandidateView]) {
+        if windows.is_empty() {
+            return;
+        }
         let content_width = ui.available_width();
         let tile_width = ((content_width - 4.0) / 2.0).max(82.0);
         let row_count = windows.len().div_ceil(2);
@@ -780,7 +814,11 @@ impl TableArrangerApp {
                             );
                         },
                     );
-                    self.application_window_controls(ui, window);
+                    if window.is_clubgg_lobby {
+                        self.lobby_window_controls(ui, window);
+                    } else {
+                        self.application_window_controls(ui, window);
+                    }
                 });
             })
             .response
@@ -807,6 +845,44 @@ impl TableArrangerApp {
                     Some(WindowMode::FreeSpace),
                     FREE_SPACE,
                     "Fill space: use only the vertical strip right of poker tables",
+                ),
+                (
+                    ActionIcon::TopRight,
+                    Some(WindowMode::TopRight),
+                    TOP_RIGHT,
+                    "Top-right: keep its size and anchor it at the display's top-right",
+                ),
+            ] {
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                if icon_button(ui, rect, icon, mode == Some(window.mode), color, tooltip).clicked()
+                {
+                    if let Some(mode) = mode {
+                        self.set_window_mode(window, mode);
+                    } else {
+                        self.send(ControllerCommand::Locate(window.id));
+                    }
+                }
+            }
+        });
+    }
+
+    fn lobby_window_controls(&self, ui: &mut egui::Ui, window: &CandidateView) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (icon, mode, color, tooltip) in [
+                (ActionIcon::Locate, None, ACCENT, "Locate this ClubGG lobby"),
+                (
+                    ActionIcon::Park,
+                    Some(WindowMode::Parked),
+                    PARKED,
+                    "Park this lobby at the bottom-right",
+                ),
+                (
+                    ActionIcon::Ignore,
+                    Some(WindowMode::Ignored),
+                    egui::Color32::GRAY,
+                    "Ignore: leave this lobby untouched",
                 ),
                 (
                     ActionIcon::TopRight,
@@ -1124,12 +1200,21 @@ fn desired_panel_height(snapshot: &UiSnapshot) -> f32 {
     let poker = snapshot
         .candidates
         .iter()
-        .filter(|window| window.poker_client.is_some())
+        .filter(|window| window.poker_client.is_some() && !window.is_clubgg_lobby)
         .count();
     let ignored_poker = snapshot
         .candidates
         .iter()
-        .filter(|window| window.poker_client.is_some() && window.mode == WindowMode::Ignored)
+        .filter(|window| {
+            window.poker_client.is_some()
+                && !window.is_clubgg_lobby
+                && window.mode == WindowMode::Ignored
+        })
+        .count();
+    let lobbies = snapshot
+        .candidates
+        .iter()
+        .filter(|window| window.is_clubgg_lobby)
         .count();
     let applications = snapshot
         .candidates
@@ -1145,9 +1230,22 @@ fn desired_panel_height(snapshot: &UiSnapshot) -> f32 {
     } else {
         MINIMUM_BOARD_HEIGHT
     };
+    let lobby_rows = lobbies.div_ceil(2);
     let application_rows = applications.div_ceil(2);
-    let application_height = application_rows as f32 * APPLICATION_TILE_HEIGHT
+    let lobby_height = if lobby_rows == 0 {
+        0.0
+    } else {
+        16.0 + lobby_rows as f32 * APPLICATION_TILE_HEIGHT
+            + lobby_rows.saturating_sub(1) as f32 * CARD_ROW_GAP
+    };
+    let other_height = application_rows as f32 * APPLICATION_TILE_HEIGHT
         + application_rows.saturating_sub(1) as f32 * CARD_ROW_GAP;
+    let group_gap = if lobbies > 0 && applications > 0 {
+        22.0
+    } else {
+        0.0
+    };
+    let application_height = lobby_height + group_gap + other_height;
     let cards_height = poker_height
         .max(application_height)
         .max(MINIMUM_BOARD_HEIGHT);
@@ -1413,6 +1511,15 @@ fn empty_section(ui: &mut egui::Ui, title: &str, detail: &str) {
 }
 
 fn window_subtitle(window: &CandidateView) -> String {
+    if window.is_clubgg_lobby {
+        return match window.mode {
+            WindowMode::Parked => "Lobby · parked bottom-right".to_owned(),
+            WindowMode::TopRight => format!("Lobby · top-right · {}", status_text(window)),
+            WindowMode::Ignored => "Lobby · ignored".to_owned(),
+            WindowMode::FreeSpace => format!("Lobby · fills right side · {}", status_text(window)),
+            WindowMode::Arranged => "Lobby · not a poker-table slot".to_owned(),
+        };
+    }
     match window.mode {
         WindowMode::Arranged => format!(
             "Table {} · {}",
@@ -1562,6 +1669,7 @@ mod tests {
                     },
                     class_name: "TestWindow".to_owned(),
                     poker_client: (index < 8).then_some(PokerClientKind::ClubGg),
+                    is_clubgg_lobby: false,
                     current_rect: Rect::new(0, 0, 640, 480),
                     likely_table: index < 8,
                     mode: if index == 0 {
@@ -1718,6 +1826,7 @@ mod tests {
                     },
                     class_name: "TestWindow".to_owned(),
                     poker_client: (index < 5).then_some(PokerClientKind::ClubGg),
+                    is_clubgg_lobby: false,
                     current_rect: Rect::new(0, 0, 640, 480),
                     likely_table: index < 5,
                     mode: if index < 2 {
