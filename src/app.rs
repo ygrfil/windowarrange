@@ -300,6 +300,25 @@ impl TableArrangerApp {
             {
                 self.send(ControllerCommand::ForceArrange);
             }
+            let preserve_requested = self.snapshot.preserve_table_slots_requested;
+            if ui
+                .add_sized(
+                    [64.0, 24.0],
+                    egui::Button::new("Space").selected(preserve_requested),
+                )
+                .on_hover_text(if self.snapshot.preserve_table_slots_auto_suppressed {
+                    "Preserve table slots is On but currently inactive because two or more active poker columns already occupy the footprint"
+                } else if preserve_requested {
+                    "Preserve table slots is On"
+                } else {
+                    "Preserve table slots is Off"
+                })
+                .clicked()
+            {
+                self.send(ControllerCommand::SetPreserveTableSlots(
+                    !preserve_requested,
+                ));
+            }
             if ui
                 .add_sized([64.0, 24.0], egui::Button::new("Settings"))
                 .on_hover_text("Workspace, display, defaults, and hotkeys")
@@ -768,7 +787,7 @@ impl TableArrangerApp {
                     ActionIcon::Park,
                     WindowMode::Parked,
                     PARKED,
-                    "Park at bottom-right",
+                    "Park at top-right",
                 ),
                 (
                     ActionIcon::Ignore,
@@ -1133,25 +1152,6 @@ fn settings_controls(
             });
     });
 
-    let mut preserve_requested = snapshot.preserve_table_slots_requested;
-    if ui
-        .checkbox(&mut preserve_requested, "Preserve table slots")
-        .on_hover_text(if snapshot.preserve_table_slots_auto_suppressed {
-            "Preference is On but currently inactive because two or more active poker columns already occupy the footprint; uncheck to keep it manually Off"
-        } else {
-            "Keep empty poker positions up to a maximum two-column footprint"
-        })
-        .changed()
-    {
-        let _ = commands.send(ControllerCommand::SetPreserveTableSlots(preserve_requested));
-    }
-    if snapshot.preserve_table_slots_auto_suppressed {
-        ui.label(
-            egui::RichText::new("Currently inactive: two or more active columns")
-                .small()
-                .color(ui.visuals().weak_text_color()),
-        );
-    }
     ui.horizontal_wrapped(|ui| {
         for (icon, label) in [
             (ActionIcon::Arrange, "Active"),
@@ -1599,7 +1599,7 @@ fn window_subtitle(window: &CandidateView) -> String {
                 .as_ref()
                 .map_or_else(|| "Ready".to_owned(), ToString::to_string)
         ),
-        WindowMode::Parked => "Parked at bottom-right".to_owned(),
+        WindowMode::Parked => "Parked at top-right".to_owned(),
         WindowMode::TopRight => format!("Top-right · {}", status_text(window)),
         WindowMode::FreeSpace => format!("Fills right-side space · {}", status_text(window)),
         WindowMode::Ignored if window.likely_table => "Not managed · likely table".to_owned(),

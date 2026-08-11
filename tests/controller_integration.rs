@@ -19,6 +19,8 @@ use clubgg_table_arranger::{
     },
 };
 
+static NATIVE_EVENT_PENDING: AtomicBool = AtomicBool::new(false);
+
 #[derive(Clone)]
 struct MockBackend {
     candidates: Arc<Mutex<Vec<WindowCandidate>>>,
@@ -234,7 +236,7 @@ fn closing_disabling_and_reordering_preserve_relative_order() {
             .lock()
             .unwrap()
             .iter()
-            .any(|(id, rect)| *id == WindowId(2) && *rect == Rect::new(2512, 924, 240, 180))
+            .any(|(id, rect)| *id == WindowId(2) && *rect == Rect::new(2512, 0, 240, 180))
     );
 
     handle
@@ -639,7 +641,7 @@ fn parked_table_releases_its_slot_and_leaves_only_its_parked_miniature() {
             .find(|candidate| candidate.id == WindowId(1))
             .unwrap()
             .current_rect,
-        Rect::new(2512, 924, 240, 180)
+        Rect::new(2512, 0, 240, 180)
     );
 
     handle
@@ -794,7 +796,7 @@ fn disabling_slot_preservation_compacts_manual_holes_immediately() {
 }
 
 #[test]
-fn parked_tables_line_up_from_bottom_right_without_overlap() {
+fn parked_tables_line_up_from_top_right_without_overlap() {
     let backend = MockBackend::with_tables(3);
     let store = ConfigStore::at(temp_config_path("parked-shoulder-row"));
     let config = AppConfig {
@@ -829,9 +831,9 @@ fn parked_tables_line_up_from_bottom_right_without_overlap() {
             .find(|(candidate, _)| *candidate == WindowId(id))
             .map(|(_, rect)| *rect)
     };
-    assert_eq!(last_rect(1), Some(Rect::new(2512, 924, 240, 180)));
-    assert_eq!(last_rect(2), Some(Rect::new(2272, 924, 240, 180)));
-    assert_eq!(last_rect(3), Some(Rect::new(2032, 924, 240, 180)));
+    assert_eq!(last_rect(1), Some(Rect::new(2512, 0, 240, 180)));
+    assert_eq!(last_rect(2), Some(Rect::new(2272, 0, 240, 180)));
+    assert_eq!(last_rect(3), Some(Rect::new(2032, 0, 240, 180)));
 
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
@@ -1004,7 +1006,7 @@ fn saved_parked_clubgg_lobby_remains_visible_and_managed() {
         clubgg_table_arranger::model::CandidateDisposition::Parked,
     );
     let store = ConfigStore::at(temp_config_path("parked-clubgg-lobby-visible"));
-    let handle = spawn_controller(Arc::new(backend), config, store);
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store);
     let snapshot = wait_for_snapshot(&handle.snapshots, |snapshot| {
         candidate_mode(snapshot, 8) == WindowMode::Parked
     });
@@ -1017,6 +1019,17 @@ fn saved_parked_clubgg_lobby_remains_visible_and_managed() {
             .poker_slots
             .iter()
             .all(|slot| slot.occupant.is_none())
+    );
+    assert_eq!(
+        backend
+            .moves
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(id, _)| *id == WindowId(8))
+            .map(|(_, rect)| *rect),
+        Some(Rect::new(2512, 924, 240, 180))
     );
 
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
@@ -1578,6 +1591,147 @@ fn reordered_table_slots_survive_controller_restart() {
         .commands
         .send(ControllerCommand::Shutdown)
         .unwrap();
+}
+
+#[test]
+fn dragging_a_table_to_another_screen_slot_updates_and_persists_the_ui_order() {
+    let backend = MockBackend::with_tables(4);
+    let store = ConfigStore::at(temp_config_path("screen-reordered-table-order"));
+    let config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store.clone());
+    let initial = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 4);
+    let destination = initial
+        .poker_slots
+        .iter()
+        .find(|slot| slot.id == PokerSlotId::club(0, 0))
+        .unwrap()
+        .rect;
+    backend
+        .candidates
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .find(|candidate| candidate.id == WindowId(4))
+        .unwrap()
+        .rect = destination;
+
+    handle
+        .commands
+        .send(ControllerCommand::NativeWindowEvent(&NATIVE_EVENT_PENDING))
+        .unwrap();
+    let reordered = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot
+            .poker_slots
+            .iter()
+            .any(|slot| slot.id == PokerSlotId::club(0, 0) && slot.occupant == Some(WindowId(4)))
+    });
+    assert_eq!(ids(&reordered), vec![4, 2, 3, 1]);
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+    drop(handle);
+
+    let mut restarted_config = store.load().unwrap();
+    restarted_config.auto_arrange = false;
+    let restarted = spawn_controller(Arc::new(backend), restarted_config, store);
+    let restored = wait_for_snapshot(&restarted.snapshots, |snapshot| snapshot.tables.len() == 4);
+    assert_eq!(ids(&restored), vec![4, 2, 3, 1]);
+    restarted
+        .commands
+        .send(ControllerCommand::Shutdown)
+        .unwrap();
+}
+
+#[test]
+fn closing_a_solo_column_keeps_its_placeholder_until_normal_assignment_reuses_it() {
+    let backend = MockBackend::with_tables(5);
+    let store = ConfigStore::at(temp_config_path("closed-column-placeholder"));
+    let config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store.clone());
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 5);
+
+    backend
+        .candidates
+        .lock()
+        .unwrap()
+        .retain(|candidate| candidate.id != WindowId(5));
+    handle
+        .commands
+        .send(ControllerCommand::ForceArrange)
+        .unwrap();
+    let closed = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 4);
+    assert!(
+        closed
+            .poker_slots
+            .iter()
+            .any(|slot| { slot.id == PokerSlotId::club(2, 0) && slot.occupant.is_none() })
+    );
+    assert_eq!(ids(&closed), vec![1, 2, 3, 4]);
+    assert_eq!(
+        store.load().unwrap().poker_placeholders,
+        vec![PokerSlotId::club(2, 0)]
+    );
+
+    backend.candidates.lock().unwrap().push(candidate(6));
+    handle
+        .commands
+        .send(ControllerCommand::ForceArrange)
+        .unwrap();
+    let reopened = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 5);
+    assert_eq!(ids(&reopened), vec![1, 2, 3, 4, 6]);
+    assert!(
+        reopened.poker_slots.iter().any(|slot| {
+            slot.id == PokerSlotId::club(2, 0) && slot.occupant == Some(WindowId(6))
+        })
+    );
+    assert!(store.load().unwrap().poker_placeholders.is_empty());
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
+fn closing_one_identical_table_preserves_the_other_occurrences_exact_slot() {
+    let backend = MockBackend::with_tables(2);
+    {
+        let mut candidates = backend.candidates.lock().unwrap();
+        candidates[1].signature = candidates[0].signature.clone();
+        candidates[1].label = candidates[0].label.clone();
+    }
+    let store = ConfigStore::at(temp_config_path("closed-identical-occurrence"));
+    let config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store);
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 2);
+
+    backend
+        .candidates
+        .lock()
+        .unwrap()
+        .retain(|candidate| candidate.id != WindowId(1));
+    handle
+        .commands
+        .send(ControllerCommand::ForceArrange)
+        .unwrap();
+    let closed = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 1);
+    assert!(
+        closed
+            .poker_slots
+            .iter()
+            .any(|slot| { slot.id == PokerSlotId::club(0, 0) && slot.occupant.is_none() })
+    );
+    assert!(
+        closed.poker_slots.iter().any(|slot| {
+            slot.id == PokerSlotId::club(0, 1) && slot.occupant == Some(WindowId(2))
+        })
+    );
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
 
 fn candidate(number: usize) -> WindowCandidate {

@@ -6,9 +6,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::model::{CandidateDisposition, PokerColumnAssignment, WindowSignature};
+use crate::model::{CandidateDisposition, PokerColumnAssignment, PokerSlotId, WindowSignature};
 
-const CONFIG_VERSION: u32 = 7;
+const CONFIG_VERSION: u32 = 8;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,6 +68,8 @@ pub struct AppConfig {
     pub detection_rules: Vec<DetectionRule>,
     pub table_order: Vec<WindowSignature>,
     pub poker_columns: Vec<PokerColumnAssignment>,
+    /// Anonymous slots intentionally left behind by a closed or manually moved table.
+    pub poker_placeholders: Vec<PokerSlotId>,
     pub hotkeys: HotkeySettings,
 }
 
@@ -83,6 +85,7 @@ impl Default for AppConfig {
             detection_rules: Vec::new(),
             table_order: Vec::new(),
             poker_columns: Vec::new(),
+            poker_placeholders: Vec::new(),
             hotkeys: HotkeySettings::default(),
         }
     }

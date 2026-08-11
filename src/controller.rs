@@ -155,7 +155,7 @@ impl Controller {
     }
 
     fn run(mut self, commands: Receiver<ControllerCommand>) {
-        self.reconcile();
+        self.reconcile(false);
         self.publish();
 
         loop {
@@ -176,7 +176,7 @@ impl Controller {
             let discovery_due = self.discovery_due.is_some_and(|due| Instant::now() >= due);
             if discovery_due || self.last_reconcile.elapsed() >= FALLBACK_RECONCILE_INTERVAL {
                 self.discovery_due = None;
-                self.reconcile();
+                self.reconcile(discovery_due);
             }
 
             if self.config.auto_arrange
@@ -204,7 +204,7 @@ impl Controller {
         match command {
             ControllerCommand::ForceArrange => {
                 self.discovery_due = None;
-                self.reconcile();
+                self.reconcile(false);
                 self.arrange();
             }
             ControllerCommand::NativeWindowEvent(pending) => {
@@ -216,7 +216,7 @@ impl Controller {
                 self.save_config();
                 if enabled {
                     self.discovery_due = None;
-                    self.reconcile();
+                    self.reconcile(false);
                     self.arrange();
                 } else {
                     self.publish();
@@ -224,6 +224,9 @@ impl Controller {
             }
             ControllerCommand::SetPreserveTableSlots(enabled) => {
                 self.config.preserve_table_slots = enabled;
+                if !enabled {
+                    self.config.poker_placeholders.clear();
+                }
                 self.sync_poker_columns();
                 self.save_config();
                 self.arrange();
@@ -231,7 +234,7 @@ impl Controller {
             ControllerCommand::SetDefaultApplicationMode(mode) => {
                 self.config.default_application_mode = mode;
                 self.save_config();
-                self.reconcile();
+                self.reconcile(false);
                 self.arrange();
             }
             ControllerCommand::SetEnabled { id, enabled } => {
@@ -338,7 +341,7 @@ impl Controller {
             self.window_statuses.remove(&id);
             self.release_slot_for(id);
         }
-        self.reconcile();
+        self.reconcile(false);
 
         if let Some(index) = self.tables.iter().position(|table| table.id == id) {
             match mode {
@@ -381,7 +384,7 @@ impl Controller {
             self.config.set_disposition(signature, disposition);
         }
         self.save_config();
-        self.reconcile();
+        self.reconcile(false);
         self.arrange();
     }
 
@@ -423,7 +426,7 @@ impl Controller {
         self.publish();
     }
 
-    fn reconcile(&mut self) {
+    fn reconcile(&mut self, sync_screen_positions: bool) {
         self.last_reconcile = Instant::now();
         let mut candidates = match self.backend.enumerate_candidates() {
             Ok(candidates) => candidates,
@@ -459,6 +462,11 @@ impl Controller {
         };
 
         let old_ids: HashSet<_> = self.tables.iter().map(|table| table.id).collect();
+        let old_rects: HashMap<_, _> = self
+            .tables
+            .iter()
+            .map(|table| (table.id, table.current_rect))
+            .collect();
         let old_candidate_ids: HashSet<_> = self
             .candidates
             .iter()
@@ -467,6 +475,21 @@ impl Controller {
         let old_positioned_ids = self.positioned_window_ids();
         let candidate_by_id: HashMap<_, _> =
             candidates.iter().map(|item| (item.id, item)).collect();
+
+        let old_resolved = resolved_slot_table_indices(&self.config.poker_columns, &self.tables);
+        let closed_slots: Vec<_> = old_resolved
+            .into_iter()
+            .filter_map(|(slot, index)| {
+                (!candidate_by_id.contains_key(&self.tables[index].id)).then_some(slot)
+            })
+            .collect();
+        let closed_slots_changed = !closed_slots.is_empty();
+        for slot in closed_slots {
+            clear_slot(&mut self.config.poker_columns, slot);
+            if self.config.preserve_table_slots && !self.config.poker_placeholders.contains(&slot) {
+                self.config.poker_placeholders.push(slot);
+            }
+        }
 
         self.tables
             .retain(|table| candidate_by_id.contains_key(&table.id));
@@ -540,7 +563,8 @@ impl Controller {
                 .map_or((1_u8, usize::MAX), |index| (0_u8, *index))
         });
         let slots_changed = self.sync_poker_columns();
-        if table_order_changed || slots_changed {
+        let screen_slots_changed = sync_screen_positions && self.sync_slots_from_screen(&old_rects);
+        if table_order_changed || slots_changed || screen_slots_changed || closed_slots_changed {
             self.save_config();
         }
 
@@ -670,10 +694,16 @@ impl Controller {
                 *remaining -= 1;
             } else {
                 clear_slot(&mut self.config.poker_columns, slot);
+                if self.config.preserve_table_slots
+                    && !self.config.poker_placeholders.contains(&slot)
+                {
+                    self.config.poker_placeholders.push(slot);
+                }
             }
         }
 
         if !self.config.preserve_table_slots {
+            self.config.poker_placeholders.clear();
             self.config.poker_columns =
                 compact_columns(self.tables.iter().filter(|table| table.enabled));
         } else {
@@ -706,7 +736,13 @@ impl Controller {
             for (signature, client) in pending {
                 assign_new_signature(&mut self.config.poker_columns, signature, client);
             }
-            normalize_preserved_columns(&mut self.config.poker_columns);
+            self.config
+                .poker_placeholders
+                .retain(|slot| signature_at_slot(&self.config.poker_columns, *slot).is_none());
+            normalize_preserved_columns(
+                &mut self.config.poker_columns,
+                &mut self.config.poker_placeholders,
+            );
         }
 
         self.sort_tables_by_columns();
@@ -721,8 +757,12 @@ impl Controller {
     fn compact_active_poker_columns(&mut self) {
         self.config.poker_columns =
             compact_columns(self.tables.iter().filter(|table| table.enabled));
+        self.config.poker_placeholders.clear();
         if self.config.preserve_table_slots {
-            normalize_preserved_columns(&mut self.config.poker_columns);
+            normalize_preserved_columns(
+                &mut self.config.poker_columns,
+                &mut self.config.poker_placeholders,
+            );
         }
         self.config.table_order = self
             .tables
@@ -758,6 +798,7 @@ impl Controller {
             return;
         };
         clear_slot(&mut self.config.poker_columns, slot);
+        self.config.poker_placeholders.retain(|item| *item != slot);
     }
 
     fn move_to_slot(&mut self, source: WindowId, destination: PokerSlotId) -> bool {
@@ -803,6 +844,13 @@ impl Controller {
                     (slot, owner)
                 })
                 .collect();
+            for placeholder in &mut self.config.poker_placeholders {
+                if placeholder.column == source_slot.column {
+                    placeholder.column = destination.column;
+                } else if placeholder.column == destination.column {
+                    placeholder.column = source_slot.column;
+                }
+            }
         } else {
             let destination_owner = intended_owners.remove(&destination);
             intended_owners.remove(&source_slot);
@@ -823,6 +871,12 @@ impl Controller {
                 destination,
                 Some(source_signature),
             );
+            self.config
+                .poker_placeholders
+                .retain(|slot| *slot != destination && *slot != source_slot);
+            if destination_owner.is_none() && self.config.preserve_table_slots {
+                self.config.poker_placeholders.push(source_slot);
+            }
         }
         let intended_rank_by_id: HashMap<_, _> = signature_slots(&self.config.poker_columns)
             .into_iter()
@@ -842,7 +896,11 @@ impl Controller {
         if self.effective_preserve_table_slots() {
             self.config.poker_columns.clone()
         } else if self.config.preserve_table_slots {
-            active_assigned_columns(&self.config.poker_columns, &self.tables)
+            active_assigned_columns(
+                &self.config.poker_columns,
+                &self.tables,
+                &self.config.poker_placeholders,
+            )
         } else {
             compact_columns(self.tables.iter().filter(|table| table.enabled))
         }
@@ -895,6 +953,64 @@ impl Controller {
             .and_then(|id| self.monitors.iter().find(|monitor| &monitor.id == id))
             .or_else(|| self.monitors.iter().find(|monitor| monitor.primary))
             .or_else(|| self.monitors.first())
+    }
+
+    fn sync_slots_from_screen(&mut self, old_rects: &HashMap<WindowId, Rect>) -> bool {
+        let Some(monitor) = self.selected_monitor().cloned() else {
+            return false;
+        };
+        let columns = self.runtime_columns();
+        let layout = self.mixed_layout_for(&monitor, &columns);
+        let mut destinations = Vec::new();
+        for (column_index, assignment) in columns.iter().enumerate() {
+            let Some(column) = layout.columns.get(column_index) else {
+                continue;
+            };
+            match assignment {
+                PokerColumnAssignment::ClubGg { .. } | PokerColumnAssignment::Empty => {
+                    if let Some(rect) = column.top {
+                        destinations.push((PokerSlotId::club(column_index, 0), rect));
+                    }
+                    if let Some(rect) = column.bottom {
+                        destinations.push((PokerSlotId::club(column_index, 1), rect));
+                    }
+                }
+                PokerColumnAssignment::LdPlayer { .. } => {
+                    destinations.push((PokerSlotId::full_height(column_index), column.bounds));
+                }
+            }
+        }
+
+        let moved: Vec<_> = self
+            .tables
+            .iter()
+            .filter(|table| table.enabled)
+            .filter_map(|table| {
+                old_rects
+                    .get(&table.id)
+                    .filter(|old| **old != table.current_rect)
+                    .map(|_| (table.id, table.current_rect))
+            })
+            .collect();
+        let mut changed = false;
+        for (id, rect) in moved {
+            let center_x = rect.left.saturating_add(rect.width / 2);
+            let center_y = rect.top.saturating_add(rect.height / 2);
+            let destination = destinations.iter().find_map(|(slot, target)| {
+                (center_x >= target.left
+                    && center_x < target.right()
+                    && center_y >= target.top
+                    && center_y < target.bottom())
+                .then_some(*slot)
+            });
+            if let Some(destination) = destination {
+                changed |= self.move_to_slot(id, destination);
+            }
+        }
+        if changed {
+            self.persist_table_order();
+        }
+        changed
     }
 
     fn arrange(&mut self) {
@@ -1120,14 +1236,21 @@ impl Controller {
             .collect();
         let parked: Vec<_> = parked_tables
             .into_iter()
-            .map(|index| (Some(index), None))
-            .chain(parked_lobbies.into_iter().map(|index| (None, Some(index))))
+            .map(|index| (Some(index), None, true))
+            .chain(
+                parked_lobbies
+                    .into_iter()
+                    .map(|index| (None, Some(index), false)),
+            )
             .collect();
-        let mut cursor_right = monitor.work_area.right();
-        let mut cursor_bottom = monitor.work_area.bottom();
-        let mut row_height = 0_i32;
+        let mut table_cursor_right = monitor.work_area.right();
+        let mut table_cursor_top = monitor.work_area.top;
+        let mut table_row_height = 0_i32;
+        let mut lobby_cursor_right = monitor.work_area.right();
+        let mut lobby_cursor_bottom = monitor.work_area.bottom();
+        let mut lobby_row_height = 0_i32;
 
-        for (table_index, lobby_index) in parked {
+        for (table_index, lobby_index, park_at_top) in parked {
             let (id, aspect_ratio) = if let Some(index) = table_index {
                 (
                     self.tables[index].id,
@@ -1147,19 +1270,33 @@ impl Controller {
                 .unwrap_or_else(|_| crate::model::Size::new(240, 180));
             let width = size.width.clamp(1, monitor.work_area.width);
             let height = size.height.clamp(1, monitor.work_area.height);
-            if cursor_right.saturating_sub(width) < monitor.work_area.left {
-                cursor_right = monitor.work_area.right();
-                cursor_bottom = cursor_bottom.saturating_sub(row_height);
-                row_height = 0;
-            }
-            let rect = Rect::new(
-                cursor_right.saturating_sub(width),
-                cursor_bottom
-                    .saturating_sub(height)
-                    .max(monitor.work_area.top),
-                width,
-                height,
-            );
+            let rect = if park_at_top {
+                if table_cursor_right.saturating_sub(width) < monitor.work_area.left {
+                    table_cursor_right = monitor.work_area.right();
+                    table_cursor_top = table_cursor_top.saturating_add(table_row_height);
+                    table_row_height = 0;
+                }
+                Rect::new(
+                    table_cursor_right.saturating_sub(width),
+                    table_cursor_top.min(monitor.work_area.bottom().saturating_sub(height)),
+                    width,
+                    height,
+                )
+            } else {
+                if lobby_cursor_right.saturating_sub(width) < monitor.work_area.left {
+                    lobby_cursor_right = monitor.work_area.right();
+                    lobby_cursor_bottom = lobby_cursor_bottom.saturating_sub(lobby_row_height);
+                    lobby_row_height = 0;
+                }
+                Rect::new(
+                    lobby_cursor_right.saturating_sub(width),
+                    lobby_cursor_bottom
+                        .saturating_sub(height)
+                        .max(monitor.work_area.top),
+                    width,
+                    height,
+                )
+            };
             match self.backend.move_resize(id, rect) {
                 Ok(actual) => {
                     if let Some(index) = table_index {
@@ -1169,8 +1306,13 @@ impl Controller {
                         self.candidates[index].rect = actual;
                         self.window_statuses.insert(id, TableStatus::Parked);
                     }
-                    cursor_right = actual.left;
-                    row_height = row_height.max(actual.height);
+                    if park_at_top {
+                        table_cursor_right = actual.left;
+                        table_row_height = table_row_height.max(actual.height);
+                    } else {
+                        lobby_cursor_right = actual.left;
+                        lobby_row_height = lobby_row_height.max(actual.height);
+                    }
                 }
                 Err(BackendError::AccessDenied) => {
                     if let Some(index) = table_index {
@@ -1178,8 +1320,13 @@ impl Controller {
                     } else {
                         self.window_statuses.insert(id, TableStatus::AccessDenied);
                     }
-                    cursor_right = rect.left;
-                    row_height = row_height.max(height);
+                    if park_at_top {
+                        table_cursor_right = rect.left;
+                        table_row_height = table_row_height.max(height);
+                    } else {
+                        lobby_cursor_right = rect.left;
+                        lobby_row_height = lobby_row_height.max(height);
+                    }
                 }
                 Err(error) => {
                     let status = TableStatus::MoveFailed(error.to_string());
@@ -1188,8 +1335,13 @@ impl Controller {
                     } else {
                         self.window_statuses.insert(id, status);
                     }
-                    cursor_right = rect.left;
-                    row_height = row_height.max(height);
+                    if park_at_top {
+                        table_cursor_right = rect.left;
+                        table_row_height = table_row_height.max(height);
+                    } else {
+                        lobby_cursor_right = rect.left;
+                        lobby_row_height = lobby_row_height.max(height);
+                    }
                 }
             }
         }
@@ -1395,6 +1547,7 @@ fn compact_columns<'a>(
 fn active_assigned_columns(
     columns: &[PokerColumnAssignment],
     tables: &[ManagedTable],
+    placeholders: &[PokerSlotId],
 ) -> Vec<PokerColumnAssignment> {
     let resolved = resolved_slot_table_indices(columns, tables);
     columns
@@ -1418,8 +1571,10 @@ fn active_assigned_columns(
                             .is_some_and(|index| tables[*index].enabled)
                     })
                     .cloned();
-                (top.is_some() || bottom.is_some())
-                    .then_some(PokerColumnAssignment::ClubGg { top, bottom })
+                (top.is_some()
+                    || bottom.is_some()
+                    || placeholders.iter().any(|slot| slot.column == column_index))
+                .then_some(PokerColumnAssignment::ClubGg { top, bottom })
             }
             PokerColumnAssignment::LdPlayer { table } => table
                 .as_ref()
@@ -1429,8 +1584,17 @@ fn active_assigned_columns(
                         .is_some_and(|index| tables[*index].enabled)
                 })
                 .cloned()
-                .map(|table| PokerColumnAssignment::LdPlayer { table: Some(table) }),
-            PokerColumnAssignment::Empty => None,
+                .map(|table| PokerColumnAssignment::LdPlayer { table: Some(table) })
+                .or_else(|| {
+                    placeholders
+                        .iter()
+                        .any(|slot| slot.column == column_index)
+                        .then_some(PokerColumnAssignment::LdPlayer { table: None })
+                }),
+            PokerColumnAssignment::Empty => placeholders
+                .iter()
+                .any(|slot| slot.column == column_index)
+                .then_some(PokerColumnAssignment::Empty),
         })
         .collect()
 }
@@ -1563,17 +1727,35 @@ fn assign_new_signature(
     }
 }
 
-fn normalize_preserved_columns(columns: &mut Vec<PokerColumnAssignment>) {
+fn normalize_preserved_columns(
+    columns: &mut Vec<PokerColumnAssignment>,
+    placeholders: &mut Vec<PokerSlotId>,
+) {
     let owned = columns
         .iter()
         .filter(|column| column_is_owned(column))
         .count();
-    let mut anonymous_left = 2_usize.saturating_sub(owned);
-    columns.retain(|column| {
-        if column_is_owned(column) {
-            true
-        } else if anonymous_left > 0 {
-            anonymous_left -= 1;
+    let placeholder_columns: HashSet<_> = placeholders.iter().map(|slot| slot.column).collect();
+    let mut anonymous_left = 2_usize.saturating_sub(owned + placeholder_columns.len());
+    let old_columns = std::mem::take(columns);
+    let mut column_map = HashMap::new();
+    for (old_index, column) in old_columns.into_iter().enumerate() {
+        let keep = column_is_owned(&column)
+            || placeholder_columns.contains(&old_index)
+            || if anonymous_left > 0 {
+                anonymous_left -= 1;
+                true
+            } else {
+                false
+            };
+        if keep {
+            column_map.insert(old_index, columns.len());
+            columns.push(column);
+        }
+    }
+    placeholders.retain_mut(|slot| {
+        if let Some(new_column) = column_map.get(&slot.column) {
+            slot.column = *new_column;
             true
         } else {
             false
