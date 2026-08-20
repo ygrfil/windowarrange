@@ -20,7 +20,9 @@ use windows::{
         Graphics::{
             Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
             Gdi::{
-                EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
+                BI_RGB, BITMAPINFO, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC,
+                DeleteObject, EnumDisplayMonitors, GetMonitorInfoW, HDC, HGDIOBJ, HMONITOR,
+                MONITORINFO, MONITORINFOEXW, SelectObject,
             },
         },
         System::{
@@ -37,17 +39,19 @@ use windows::{
             Accessibility::{HWINEVENTHOOK, SetWinEventHook},
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             WindowsAndMessaging::{
-                BringWindowToTop, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE,
-                EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, EnumWindows, FLASHW_ALL,
-                FLASHW_TIMERNOFG, FLASHWINFO, FindWindowW, FlashWindowEx, GA_ROOT, GWL_EXSTYLE,
-                GWL_STYLE, GetAncestor, GetClassNameW, GetForegroundWindow, GetMessageW,
-                GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-                GetWindowThreadProcessId, HWND_TOP, IsIconic, IsWindowVisible, MINMAXINFO,
+                BringWindowToTop, DI_NORMAL, DrawIconEx, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
+                EVENT_OBJECT_HIDE, EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, EnumWindows,
+                FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FindWindowW, FlashWindowEx, GA_ROOT,
+                GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE, GWL_STYLE, GetAncestor, GetClassLongPtrW,
+                GetClassNameW, GetForegroundWindow, GetMessageW, GetWindowLongPtrW, GetWindowRect,
+                GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, HICON, HWND_TOP,
+                ICON_BIG, ICON_SMALL, ICON_SMALL2, IsIconic, IsWindowVisible, MINMAXINFO,
                 MONITORINFOF_PRIMARY, MSG, OBJID_WINDOW, SET_WINDOW_POS_FLAGS, SMTO_ABORTIFHUNG,
                 SW_RESTORE, SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE,
                 SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageTimeoutW,
                 SetForegroundWindow, SetWindowPos, ShowWindowAsync, WINEVENT_OUTOFCONTEXT,
-                WINEVENT_SKIPOWNPROCESS, WM_GETMINMAXINFO, WS_CHILD, WS_DISABLED, WS_EX_TOOLWINDOW,
+                WINEVENT_SKIPOWNPROCESS, WM_GETICON, WM_GETMINMAXINFO, WS_CHILD, WS_DISABLED,
+                WS_EX_TOOLWINDOW,
             },
         },
     },
@@ -67,6 +71,135 @@ use crate::{
 static WINDOW_EVENT_SENDER: OnceLock<Sender<ControllerCommand>> = OnceLock::new();
 static WINDOW_EVENT_PENDING: AtomicBool = AtomicBool::new(false);
 const WINDOW_EVENT_STACK_BYTES: usize = 256 * 1024;
+const APPLICATION_ICON_SIZE: usize = 64;
+
+pub struct WindowIcon {
+    pub size: usize,
+    pub rgba: Vec<u8>,
+}
+
+/// Loads a window's application icon into owned RGBA pixels without transferring icon ownership.
+#[must_use]
+pub fn window_icon(id: WindowId) -> Option<WindowIcon> {
+    let hwnd = hwnd_from_id(id);
+    let icon = query_window_icon(hwnd)?;
+    render_window_icon(icon)
+}
+
+fn query_window_icon(hwnd: HWND) -> Option<HICON> {
+    for icon_kind in [ICON_BIG, ICON_SMALL2, ICON_SMALL] {
+        let mut result = 0_usize;
+        // SAFETY: hwnd comes from an enumerated top-level window. The call is bounded and writes
+        // only to the valid result pointer supplied here.
+        unsafe {
+            let _ = SendMessageTimeoutW(
+                hwnd,
+                WM_GETICON,
+                WPARAM(icon_kind as usize),
+                LPARAM(0),
+                SMTO_ABORTIFHUNG,
+                100,
+                Some(&raw mut result),
+            );
+        }
+        if result != 0 {
+            return Some(HICON(result as *mut c_void));
+        }
+    }
+
+    for class_index in [GCLP_HICON, GCLP_HICONSM] {
+        // SAFETY: reading the icon handle associated with a valid window class does not transfer
+        // ownership and does not mutate the target window.
+        let result = unsafe { GetClassLongPtrW(hwnd, class_index) };
+        if result != 0 {
+            return Some(HICON(result as *mut c_void));
+        }
+    }
+    None
+}
+
+fn render_window_icon(icon: HICON) -> Option<WindowIcon> {
+    let size = i32::try_from(APPLICATION_ICON_SIZE).ok()?;
+    let mut bitmap_info = BITMAPINFO::default();
+    bitmap_info.bmiHeader.biSize =
+        u32::try_from(size_of::<windows::Win32::Graphics::Gdi::BITMAPINFOHEADER>()).ok()?;
+    bitmap_info.bmiHeader.biWidth = size;
+    bitmap_info.bmiHeader.biHeight = -size;
+    bitmap_info.bmiHeader.biPlanes = 1;
+    bitmap_info.bmiHeader.biBitCount = 32;
+    bitmap_info.bmiHeader.biCompression = BI_RGB.0;
+
+    // SAFETY: the compatible memory DC is released on every path below.
+    let dc = unsafe { CreateCompatibleDC(None) };
+    if dc.0.is_null() {
+        return None;
+    }
+    let mut bits = std::ptr::null_mut::<c_void>();
+    // SAFETY: bitmap_info is fully initialized for a top-down 32-bit DIB and bits is a valid
+    // output pointer. The returned bitmap remains selected only while the DC is alive.
+    let bitmap = unsafe {
+        CreateDIBSection(
+            Some(dc),
+            &raw const bitmap_info,
+            DIB_RGB_COLORS,
+            &raw mut bits,
+            None,
+            0,
+        )
+    };
+    let Ok(bitmap) = bitmap else {
+        // SAFETY: dc was created successfully above and is not used afterward.
+        unsafe {
+            let _ = DeleteDC(dc);
+        }
+        return None;
+    };
+    // SAFETY: bitmap and dc are valid GDI handles owned by this function.
+    let previous = unsafe { SelectObject(dc, HGDIOBJ(bitmap.0)) };
+    // SAFETY: the DIB allocation contains exactly size*size*4 bytes.
+    unsafe { std::ptr::write_bytes(bits, 0, APPLICATION_ICON_SIZE * APPLICATION_ICON_SIZE * 4) };
+    // SAFETY: icon is a borrowed valid window/class icon; drawing does not transfer ownership.
+    let drawn = unsafe { DrawIconEx(dc, 0, 0, icon, size, size, 0, None, DI_NORMAL) }.is_ok();
+
+    let rgba = if drawn && !bits.is_null() {
+        // SAFETY: CreateDIBSection returned this allocation for the exact byte count below and it
+        // stays valid until bitmap is deleted after the copy.
+        let bgra = unsafe {
+            std::slice::from_raw_parts(
+                bits.cast::<u8>(),
+                APPLICATION_ICON_SIZE * APPLICATION_ICON_SIZE * 4,
+            )
+        };
+        let has_alpha = bgra.chunks_exact(4).any(|pixel| pixel[3] != 0);
+        let mut rgba = Vec::with_capacity(bgra.len());
+        for pixel in bgra.chunks_exact(4) {
+            let alpha = if has_alpha {
+                pixel[3]
+            } else if pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0 {
+                u8::MAX
+            } else {
+                0
+            };
+            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], alpha]);
+        }
+        Some(rgba)
+    } else {
+        None
+    };
+
+    // SAFETY: restore the previous selection before deleting our bitmap and DC.
+    unsafe {
+        if !previous.0.is_null() {
+            SelectObject(dc, previous);
+        }
+        let _ = DeleteObject(HGDIOBJ(bitmap.0));
+        let _ = DeleteDC(dc);
+    }
+    rgba.map(|rgba| WindowIcon {
+        size: APPLICATION_ICON_SIZE,
+        rgba,
+    })
+}
 
 pub fn apply_process_mitigations() -> Result<(), BackendError> {
     let mut policy = PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY::default();

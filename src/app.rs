@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use crossbeam_channel::{Receiver, Sender, bounded};
@@ -21,7 +24,7 @@ use crate::{
     tray::{TrayAction, TrayService, egui_icon},
     win32::{
         Win32Backend, acquire_single_instance, activate_existing_panel, apply_process_mitigations,
-        panel_is_visible, spawn_window_event_watcher,
+        panel_is_visible, spawn_window_event_watcher, window_icon,
     },
 };
 
@@ -146,6 +149,7 @@ struct TableArrangerApp {
     app_icon: Arc<egui::IconData>,
     rng_overlay: RngOverlay,
     selected_table: Option<crate::model::WindowId>,
+    application_icons: HashMap<WindowId, Option<egui::TextureHandle>>,
     exiting: bool,
 }
 
@@ -204,6 +208,7 @@ impl TableArrangerApp {
             app_icon,
             rng_overlay: RngOverlay::new(),
             selected_table: None,
+            application_icons: HashMap::new(),
             exiting: false,
         }
     }
@@ -232,6 +237,12 @@ impl TableArrangerApp {
 
     fn handle_background_events(&mut self, context: &egui::Context) {
         for snapshot in self.snapshots.try_iter() {
+            self.application_icons.retain(|id, _| {
+                snapshot
+                    .candidates
+                    .iter()
+                    .any(|candidate| candidate.id == *id)
+            });
             self.snapshot = Arc::clone(&snapshot);
             lock_settings(&self.settings).snapshot = snapshot;
             if self.settings_open.load(Ordering::Acquire) {
@@ -555,6 +566,23 @@ impl TableArrangerApp {
             egui::StrokeKind::Inside,
         );
 
+        if let Some(texture) = self.application_icon_texture(ui.ctx(), window.id) {
+            let available_height = (rect.height() - 34.0).max(0.0);
+            let app_icon_size = (rect.width() * 0.34)
+                .min(available_height * 0.48)
+                .clamp(18.0, 48.0);
+            let app_icon_rect = egui::Rect::from_center_size(
+                rect.center(),
+                egui::vec2(app_icon_size, app_icon_size),
+            );
+            ui.painter().image(
+                texture,
+                app_icon_rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
+
         let icon_size = ((rect.width() - 6.0) / 3.0).clamp(8.0, 12.0);
         let gap = 1.0;
         let total = icon_size * 3.0 + gap * 2.0;
@@ -623,6 +651,29 @@ impl TableArrangerApp {
         if locate_clicked {
             self.send(ControllerCommand::Locate(window.id));
         }
+    }
+
+    fn application_icon_texture(
+        &mut self,
+        context: &egui::Context,
+        id: WindowId,
+    ) -> Option<egui::TextureId> {
+        self.application_icons
+            .entry(id)
+            .or_insert_with(|| {
+                window_icon(id).map(|icon| {
+                    context.load_texture(
+                        format!("application-icon-{}", id.0),
+                        egui::ColorImage::from_rgba_unmultiplied(
+                            [icon.size, icon.size],
+                            &icon.rgba,
+                        ),
+                        egui::TextureOptions::LINEAR,
+                    )
+                })
+            })
+            .as_ref()
+            .map(egui::TextureHandle::id)
     }
 
     fn mirrored_slot(
