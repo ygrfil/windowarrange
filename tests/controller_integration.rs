@@ -978,11 +978,19 @@ fn every_candidate_exposes_arrange_park_and_ignore_state() {
     });
     assert_eq!(ignored.tables.len(), 2);
     assert_eq!(ignored.candidates.len(), 3);
-    assert_eq!(
-        store
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let persisted = loop {
+        let disposition = store
             .load()
             .unwrap()
-            .disposition_for(&candidate(1).signature),
+            .disposition_for(&candidate(1).signature);
+        if disposition.is_some() || Instant::now() >= deadline {
+            break disposition;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(
+        persisted,
         Some(clubgg_table_arranger::model::CandidateDisposition::Ignored)
     );
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
@@ -1096,7 +1104,7 @@ fn multiple_lobbies_default_to_park_without_consuming_preserved_columns() {
 }
 
 #[test]
-fn combined_lobby_mode_command_updates_every_lobby_once() {
+fn lobbies_stay_parked_and_toolbar_locate_never_moves_them() {
     let backend = MockBackend::with_tables(0);
     for id in 8..=10 {
         let mut lobby = candidate(id);
@@ -1125,18 +1133,32 @@ fn combined_lobby_mode_command_updates_every_lobby_once() {
 
     handle
         .commands
-        .send(ControllerCommand::SetClubGgLobbiesMode(WindowMode::Ignored))
+        .send(ControllerCommand::SetWindowMode {
+            id: WindowId(8),
+            mode: WindowMode::Ignored,
+        })
         .unwrap();
-    let ignored = wait_for_snapshot(&handle.snapshots, |snapshot| {
+    handle
+        .commands
+        .send(ControllerCommand::SetWindowMode {
+            id: WindowId(9),
+            mode: WindowMode::TopRight,
+        })
+        .unwrap();
+    handle
+        .commands
+        .send(ControllerCommand::ForceArrange)
+        .unwrap();
+    let parked = wait_for_snapshot(&handle.snapshots, |snapshot| {
         snapshot.candidates.len() == 3
             && snapshot
                 .candidates
                 .iter()
-                .all(|candidate| candidate.mode == WindowMode::Ignored)
+                .all(|candidate| candidate.mode == WindowMode::Parked)
     });
-    assert!(ignored.tables.is_empty());
+    assert!(parked.tables.is_empty());
     assert!(
-        ignored
+        parked
             .poker_slots
             .iter()
             .all(|slot| slot.occupant.is_none())
@@ -1150,10 +1172,10 @@ fn combined_lobby_mode_command_updates_every_lobby_once() {
             .filter(|rule| {
                 rule.signature.title_pattern.starts_with("clubgg lobby ")
                     && rule.disposition
-                        == clubgg_table_arranger::model::CandidateDisposition::Ignored
+                        != clubgg_table_arranger::model::CandidateDisposition::Parked
             })
             .count(),
-        3
+        0
     );
 
     backend.moves.lock().unwrap().clear();

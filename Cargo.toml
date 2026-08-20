@@ -1,6 +1,6 @@
 [package]
 name = "clubgg-table-arranger"
-version = "0.5.29"
+version = "0.5.31"
 edition = "2024"
 rust-version = "1.97.1"
 description = "A focus-safe Windows workspace arranger for ClubGG tables and application windows"

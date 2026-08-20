@@ -27,6 +27,7 @@ use crate::{
 
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(22, 163, 74);
 const PARKED: egui::Color32 = egui::Color32::from_rgb(217, 119, 6);
+const DARK_ORANGE: egui::Color32 = egui::Color32::from_rgb(154, 77, 0);
 const TOP_RIGHT: egui::Color32 = egui::Color32::from_rgb(37, 99, 235);
 const FREE_SPACE: egui::Color32 = egui::Color32::from_rgb(124, 58, 237);
 const BACKGROUND_EVENT_QUEUE_CAPACITY: usize = 16;
@@ -43,13 +44,6 @@ const PANEL_MAX_HEIGHT: f32 = 620.0;
 const SETTINGS_WIDTH: f32 = 440.0;
 const SETTINGS_MIN_HEIGHT: f32 = 240.0;
 const SETTINGS_MAX_HEIGHT: f32 = 700.0;
-
-#[derive(Clone)]
-enum DockItem {
-    Lobby(Vec<CandidateView>),
-    Application(CandidateView),
-    IgnoredPoker(CandidateView),
-}
 
 pub fn run() {
     let mitigation_result = apply_process_mitigations();
@@ -295,32 +289,6 @@ impl TableArrangerApp {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) -> egui::Response {
         ui.horizontal(|ui| {
-            let mut automatic = self.snapshot.auto_arrange;
-            if ui
-                .add_sized(
-                    [64.0, 24.0],
-                    egui::Button::new(if automatic { "Auto ON" } else { "Auto OFF" })
-                        .selected(automatic),
-                )
-                .on_hover_text("Automatically reapply the workspace after window changes")
-                .clicked()
-            {
-                automatic = !automatic;
-                self.send(ControllerCommand::SetAutoArrange(automatic));
-            }
-            let rng_enabled = self.rng_overlay.enabled();
-            if ui
-                .add_sized(
-                    [64.0, 24.0],
-                    egui::Button::new(if rng_enabled { "RnG ON" } else { "RnG OFF" })
-                        .selected(rng_enabled),
-                )
-                .on_hover_text("Show or hide the 1–100 random number overlay")
-                .clicked()
-            {
-                self.rng_overlay
-                    .toggle(ui.ctx(), selected_work_area(&self.snapshot));
-            }
             if ui
                 .add_sized(
                     [64.0, 24.0],
@@ -352,6 +320,30 @@ impl TableArrangerApp {
                     !preserve_requested,
                 ));
             }
+            let mut automatic = self.snapshot.auto_arrange;
+            if ui
+                .add_sized(
+                    [64.0, 24.0],
+                    egui::Button::new("Auto").selected(automatic),
+                )
+                .on_hover_text("Automatically reapply the workspace after window changes")
+                .clicked()
+            {
+                automatic = !automatic;
+                self.send(ControllerCommand::SetAutoArrange(automatic));
+            }
+            let rng_enabled = self.rng_overlay.enabled();
+            if ui
+                .add_sized(
+                    [64.0, 24.0],
+                    egui::Button::new("RnG").selected(rng_enabled),
+                )
+                .on_hover_text("Show or hide the 1–100 random number overlay")
+                .clicked()
+            {
+                self.rng_overlay
+                    .toggle(ui.ctx(), selected_work_area(&self.snapshot));
+            }
             if ui
                 .add_sized([64.0, 24.0], egui::Button::new("Settings"))
                 .on_hover_text("Workspace, display, defaults, and hotkeys")
@@ -359,6 +351,34 @@ impl TableArrangerApp {
             {
                 self.settings_open.store(true, Ordering::Release);
                 self.settings_focus_requested = true;
+            }
+            let lobby_count = self
+                .snapshot
+                .candidates
+                .iter()
+                .filter(|window| window.is_clubgg_lobby)
+                .count();
+            if ui
+                .add_enabled(
+                    lobby_count > 0,
+                    egui::Button::new(
+                        egui::RichText::new("GGLobby").color(egui::Color32::WHITE),
+                    )
+                    .fill(DARK_ORANGE)
+                    .min_size(egui::vec2(64.0, 24.0)),
+                )
+                .on_hover_text(if lobby_count == 0 {
+                    "No ClubGG lobbies detected".to_owned()
+                } else {
+                    format!(
+                        "Locate {} parked ClubGG lobb{} one by one without moving them",
+                        lobby_count,
+                        if lobby_count == 1 { "y" } else { "ies" }
+                    )
+                })
+                .clicked()
+            {
+                self.send(ControllerCommand::LocateClubGgLobbies);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
@@ -405,6 +425,14 @@ impl TableArrangerApp {
             .filter(|window| window.poker_client.is_some() && !window.is_clubgg_lobby)
             .cloned()
             .collect();
+        let mut applications: Vec<_> = self
+            .snapshot
+            .candidates
+            .iter()
+            .filter(|window| window.poker_client.is_none() && !window.is_clubgg_lobby)
+            .cloned()
+            .collect();
+        applications.sort_by_key(|window| window_mode_rank(window.mode));
 
         let Some(work_area) = self.snapshot.poker_work_area else {
             empty_section(ui, "No poker display", "Choose a display in Settings.");
@@ -429,8 +457,10 @@ impl TableArrangerApp {
         );
 
         let slots = self.snapshot.poker_slots.clone();
+        let mut occupied_right = board_rect.left();
         for slot in &slots {
             let rect = project_rect(slot.rect, work_area, board_rect);
+            occupied_right = occupied_right.max(rect.right());
             self.mirrored_slot(ui, rect, slot, &windows);
         }
 
@@ -475,6 +505,15 @@ impl TableArrangerApp {
             }
         }
 
+        let application_area = egui::Rect::from_min_max(
+            egui::pos2(
+                (occupied_right + 2.0).min(board_rect.right()),
+                board_rect.top(),
+            ),
+            board_rect.max,
+        );
+        self.application_overlay(ui, application_area, &applications);
+
         if self
             .selected_table
             .is_some_and(|selected| !windows.iter().any(|window| window.id == selected))
@@ -483,80 +522,106 @@ impl TableArrangerApp {
         }
     }
 
-    fn clubgg_lobby_chip(&self, ui: &mut egui::Ui, lobbies: &[CandidateView]) {
-        let card_width = ui.available_width();
-        let card_fill = if ui.visuals().dark_mode {
+    fn application_overlay(
+        &mut self,
+        ui: &mut egui::Ui,
+        board_rect: egui::Rect,
+        applications: &[CandidateView],
+    ) {
+        for (window, rect) in applications
+            .iter()
+            .zip(application_overlay_rects(board_rect, applications.len()))
+        {
+            self.application_mirror_tile(ui, rect, window);
+        }
+    }
+
+    fn application_mirror_tile(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        window: &CandidateView,
+    ) {
+        let fill = if ui.visuals().dark_mode {
             egui::Color32::from_gray(27)
         } else {
             egui::Color32::from_gray(248)
         };
-        let common_mode = lobbies
-            .first()
-            .map(|lobby| lobby.mode)
-            .filter(|mode| lobbies.iter().all(|lobby| lobby.mode == *mode));
-        let mut locate_clicked = false;
-        egui::Frame::new()
-            .fill(card_fill)
-            .stroke(egui::Stroke::new(
-                1.0,
-                ui.visuals().widgets.noninteractive.bg_stroke.color,
-            ))
-            .corner_radius(6)
-            .inner_margin(egui::Margin::same(4))
-            .show(ui, |ui| {
-                ui.set_min_width((card_width - 8.0).max(1.0));
-                ui.set_min_height(WINDOW_CHIP_HEIGHT - 6.0);
-                ui.horizontal(|ui| {
-                    let text_width = (ui.available_width() - 46.0).max(24.0);
-                    locate_clicked = ui
-                        .add_sized(
-                            [text_width, 18.0],
-                            egui::Button::new(lobby_summary_label(lobbies.len())).frame(false),
-                        )
-                        .on_hover_text("Raise each ClubGG lobby without moving its parked position")
-                        .clicked();
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spacing_mut().item_spacing.x = 1.0;
-                        for (icon, mode, color, tooltip) in [
-                            (
-                                ActionIcon::TopRight,
-                                WindowMode::TopRight,
-                                TOP_RIGHT,
-                                "Put all ClubGG lobbies at the display's top-right",
-                            ),
-                            (
-                                ActionIcon::Ignore,
-                                WindowMode::Ignored,
-                                egui::Color32::GRAY,
-                                "Ignore all ClubGG lobbies",
-                            ),
-                            (
-                                ActionIcon::Park,
-                                WindowMode::Parked,
-                                PARKED,
-                                "Park all ClubGG lobbies shoulder-to-shoulder",
-                            ),
-                        ] {
-                            let (rect, _) = ui
-                                .allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                            if icon_button(
-                                ui,
-                                rect,
-                                icon,
-                                common_mode == Some(mode),
-                                color,
-                                tooltip,
-                            )
-                            .clicked()
-                            {
-                                self.send(ControllerCommand::SetClubGgLobbiesMode(mode));
-                            }
-                        }
-                    });
-                });
+        ui.painter().rect_filled(rect, 4.0, fill);
+        ui.painter().rect_stroke(
+            rect,
+            4.0,
+            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+            egui::StrokeKind::Inside,
+        );
+
+        let icon_size = ((rect.width() - 6.0) / 3.0).clamp(8.0, 12.0);
+        let gap = 1.0;
+        let total = icon_size * 3.0 + gap * 2.0;
+        let start = egui::pos2(
+            rect.center().x - total / 2.0,
+            rect.bottom() - icon_size - 2.0,
+        );
+        let mut control_rects = Vec::with_capacity(3);
+        for (index, (icon, mode, color, tooltip)) in [
+            (
+                ActionIcon::Ignore,
+                WindowMode::Ignored,
+                egui::Color32::GRAY,
+                "Ignore: leave this application window untouched",
+            ),
+            (
+                ActionIcon::FillSpace,
+                WindowMode::FreeSpace,
+                FREE_SPACE,
+                "Fill space: use only the vertical strip right of poker tables",
+            ),
+            (
+                ActionIcon::TopRight,
+                WindowMode::TopRight,
+                TOP_RIGHT,
+                "Top-right: keep its size and anchor it at the display's top-right",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let control = egui::Rect::from_min_size(
+                start + egui::vec2(index as f32 * (icon_size + gap), 0.0),
+                egui::vec2(icon_size, icon_size),
+            );
+            control_rects.push(control);
+            if icon_button(ui, control, icon, mode == window.mode, color, tooltip).clicked() {
+                self.set_window_mode(window, mode);
+            }
+        }
+
+        let label_chars = ((rect.width() / 7.0).floor() as usize).clamp(4, 18);
+        ui.painter().text(
+            egui::pos2(rect.center().x, rect.top() + 3.0),
+            egui::Align2::CENTER_TOP,
+            short_label(&window.label, label_chars),
+            egui::FontId::proportional(8.5),
+            ui.visuals().text_color(),
+        );
+        let locate_clicked = clickable_body_rects(rect, &control_rects)
+            .into_iter()
+            .enumerate()
+            .any(|(index, body)| {
+                ui.interact(
+                    body,
+                    ui.make_persistent_id(("application-mirror-body", window.id.0, index)),
+                    egui::Sense::click(),
+                )
+                .on_hover_text(format!(
+                    "{}\n{}\nLeft click: Locate",
+                    window.label,
+                    window_subtitle(window)
+                ))
+                .clicked()
             });
         if locate_clicked {
-            self.send(ControllerCommand::LocateClubGgLobbies);
+            self.send(ControllerCommand::Locate(window.id));
         }
     }
 
@@ -730,21 +795,6 @@ impl TableArrangerApp {
     }
 
     fn window_dock(&mut self, ui: &mut egui::Ui) {
-        let lobbies: Vec<_> = self
-            .snapshot
-            .candidates
-            .iter()
-            .filter(|window| window.is_clubgg_lobby)
-            .cloned()
-            .collect();
-        let mut applications: Vec<_> = self
-            .snapshot
-            .candidates
-            .iter()
-            .filter(|window| window.poker_client.is_none() && !window.is_clubgg_lobby)
-            .cloned()
-            .collect();
-        applications.sort_by_key(|window| window_mode_rank(window.mode));
         let ignored_poker: Vec<_> = self
             .snapshot
             .candidates
@@ -756,47 +806,29 @@ impl TableArrangerApp {
             })
             .cloned()
             .collect();
-
-        let mut items = Vec::with_capacity(
-            usize::from(!lobbies.is_empty()) + applications.len() + ignored_poker.len(),
-        );
-        if !lobbies.is_empty() {
-            items.push(DockItem::Lobby(lobbies));
-        }
-        items.extend(applications.into_iter().map(DockItem::Application));
-        items.extend(ignored_poker.into_iter().map(DockItem::IgnoredPoker));
-
-        if items.is_empty() {
+        if ignored_poker.is_empty() {
             return;
         }
         ui.add_space(4.0);
         ui.separator();
         ui.add_space(2.0);
-        self.window_dock_grid(ui, &items);
+        self.window_dock_grid(ui, &ignored_poker);
     }
 
-    fn window_dock_grid(&mut self, ui: &mut egui::Ui, items: &[DockItem]) {
+    fn window_dock_grid(&mut self, ui: &mut egui::Ui, windows: &[CandidateView]) {
         let content_width = ui.available_width();
         let columns = window_dock_columns(content_width);
         let total_gap = CARD_ROW_GAP * (columns - 1) as f32;
         let tile_width = ((content_width - total_gap) / columns as f32).max(80.0);
-        let row_count = items.len().div_ceil(columns);
-        for (row_index, row) in items.chunks(columns).enumerate() {
+        let row_count = windows.len().div_ceil(columns);
+        for (row_index, row) in windows.chunks(columns).enumerate() {
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = CARD_ROW_GAP;
-                for item in row {
+                for window in row {
                     ui.allocate_ui_with_layout(
                         egui::vec2(tile_width, WINDOW_CHIP_HEIGHT),
                         egui::Layout::top_down(egui::Align::Min),
-                        |ui| match item {
-                            DockItem::Lobby(lobbies) => self.clubgg_lobby_chip(ui, lobbies),
-                            DockItem::Application(window) => {
-                                self.application_window_chip(ui, window);
-                            }
-                            DockItem::IgnoredPoker(window) => {
-                                self.ignored_poker_chip(ui, window);
-                            }
-                        },
+                        |ui| self.ignored_poker_chip(ui, window),
                     );
                 }
             });
@@ -804,62 +836,6 @@ impl TableArrangerApp {
                 ui.add_space(CARD_ROW_GAP);
             }
         }
-    }
-
-    fn application_window_chip(
-        &mut self,
-        ui: &mut egui::Ui,
-        window: &CandidateView,
-    ) -> egui::Response {
-        let card_fill = if ui.visuals().dark_mode {
-            egui::Color32::from_gray(27)
-        } else {
-            egui::Color32::from_gray(248)
-        };
-        let card_stroke =
-            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
-
-        let mut control_rects = Vec::new();
-        let frame = egui::Frame::new()
-            .fill(card_fill)
-            .stroke(card_stroke)
-            .corner_radius(6)
-            .inner_margin(egui::Margin::same(3))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let text_width = (ui.available_width() - 46.0).max(18.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(text_width, 16.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.add(egui::Label::new(short_label(&window.label, 13)).truncate())
-                                .on_hover_text(format!(
-                                    "{}\n{}",
-                                    window.label,
-                                    window_subtitle(window)
-                                ));
-                        },
-                    );
-                    control_rects = self.application_window_controls(ui, window);
-                });
-            })
-            .response;
-        let locate_clicked = clickable_body_rects(frame.rect, &control_rects)
-            .into_iter()
-            .enumerate()
-            .any(|(index, rect)| {
-                ui.interact(
-                    rect,
-                    ui.make_persistent_id(("application-body", window.id.0, index)),
-                    egui::Sense::click(),
-                )
-                .on_hover_text(format!("{}\nLeft click: Locate", window.label))
-                .clicked()
-            });
-        if locate_clicked {
-            self.send(ControllerCommand::Locate(window.id));
-        }
-        frame
     }
 
     fn ignored_poker_chip(&mut self, ui: &mut egui::Ui, window: &CandidateView) {
@@ -928,45 +904,6 @@ impl TableArrangerApp {
         if locate_clicked {
             self.send(ControllerCommand::Locate(window.id));
         }
-    }
-
-    fn application_window_controls(
-        &self,
-        ui: &mut egui::Ui,
-        window: &CandidateView,
-    ) -> Vec<egui::Rect> {
-        let mut control_rects = Vec::new();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 1.0;
-            for (icon, mode, color, tooltip) in [
-                (
-                    ActionIcon::Ignore,
-                    WindowMode::Ignored,
-                    egui::Color32::GRAY,
-                    "Ignore: leave this application window untouched",
-                ),
-                (
-                    ActionIcon::FillSpace,
-                    WindowMode::FreeSpace,
-                    FREE_SPACE,
-                    "Fill space: use only the vertical strip right of poker tables",
-                ),
-                (
-                    ActionIcon::TopRight,
-                    WindowMode::TopRight,
-                    TOP_RIGHT,
-                    "Top-right: keep its size and anchor it at the display's top-right",
-                ),
-            ] {
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                control_rects.push(rect);
-                if icon_button(ui, rect, icon, mode == window.mode, color, tooltip).clicked() {
-                    self.set_window_mode(window, mode);
-                }
-            }
-        });
-        control_rects
     }
 
     fn set_window_mode(&self, window: &CandidateView, mode: WindowMode) {
@@ -1268,15 +1205,6 @@ fn desired_panel_height(snapshot: &UiSnapshot, panel_width: f32) -> f32 {
                 && window.mode == WindowMode::Ignored
         })
         .count();
-    let has_lobbies = snapshot
-        .candidates
-        .iter()
-        .any(|window| window.is_clubgg_lobby);
-    let applications = snapshot
-        .candidates
-        .iter()
-        .filter(|window| window.poker_client.is_none() && !window.is_clubgg_lobby)
-        .count();
     let content_width = (panel_width - 12.0).max(1.0);
     let mirror_height = snapshot
         .poker_work_area
@@ -1285,7 +1213,7 @@ fn desired_panel_height(snapshot: &UiSnapshot, panel_width: f32) -> f32 {
             (content_width / aspect).max(MIRROR_MIN_HEIGHT)
         });
 
-    let dock_items = applications + ignored_poker + usize::from(has_lobbies);
+    let dock_items = ignored_poker;
     let dock_height = if dock_items == 0 {
         0.0
     } else {
@@ -1306,6 +1234,42 @@ fn window_dock_columns(content_width: f32) -> usize {
     } else {
         6
     }
+}
+
+fn application_overlay_rects(area: egui::Rect, count: usize) -> Vec<egui::Rect> {
+    if count == 0 || !area.is_positive() {
+        return Vec::new();
+    }
+    let rows = match count {
+        1 => 1,
+        2..=6 => 2,
+        _ => (count as f32).sqrt().ceil() as usize,
+    };
+    let columns = count.div_ceil(rows);
+    let gap = 2.0;
+    let grid = area.shrink(2.0);
+    if !grid.is_positive() {
+        return Vec::new();
+    }
+    let cell_width =
+        ((grid.width() - gap * columns.saturating_sub(1) as f32) / columns as f32).max(1.0);
+    let cell_height =
+        ((grid.height() - gap * rows.saturating_sub(1) as f32) / rows as f32).max(1.0);
+
+    (0..count)
+        .map(|index| {
+            let column = index / rows;
+            let row = index % rows;
+            egui::Rect::from_min_size(
+                grid.min
+                    + egui::vec2(
+                        column as f32 * (cell_width + gap),
+                        row as f32 * (cell_height + gap),
+                    ),
+                egui::vec2(cell_width, cell_height),
+            )
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
@@ -1541,14 +1505,6 @@ fn short_label(label: &str, max_chars: usize) -> String {
     }
 }
 
-fn lobby_summary_label(count: usize) -> String {
-    if count == 1 {
-        "ClubGG lobby ×1".to_owned()
-    } else {
-        format!("ClubGG lobbies ×{count}")
-    }
-}
-
 fn placeholder_number(slot: PokerSlotId) -> usize {
     slot.column * 2 + slot.row.unwrap_or(0) as usize + 1
 }
@@ -1678,9 +1634,8 @@ mod tests {
     use eframe::egui;
 
     use super::{
-        SETTINGS_MAX_HEIGHT, SettingsViewportState, TableArrangerApp, WINDOW_CHIP_HEIGHT,
-        clickable_body_rects, lobby_summary_label, settings_controls, slot_click_command,
-        window_mode_rank,
+        SETTINGS_MAX_HEIGHT, SettingsViewportState, TableArrangerApp, application_overlay_rects,
+        clickable_body_rects, settings_controls, slot_click_command, window_mode_rank,
     };
     use crate::{
         config::HotkeySettings,
@@ -1777,9 +1732,24 @@ mod tests {
     }
 
     #[test]
-    fn combined_lobby_label_reports_the_detected_count() {
-        assert_eq!(lobby_summary_label(1), "ClubGG lobby ×1");
-        assert_eq!(lobby_summary_label(3), "ClubGG lobbies ×3");
+    fn application_overlay_scales_like_poker_columns() {
+        let board = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(728.0, 394.0));
+        let two = application_overlay_rects(board, 2);
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[0].left(), two[1].left());
+        assert!(two[0].bottom() < two[1].bottom());
+        assert!((two[0].height() - two[1].height()).abs() < 0.01);
+        assert_eq!(two[0].left(), board.left() + 2.0);
+        assert_eq!(two[0].right(), board.right() - 2.0);
+        assert_eq!(two[1].bottom(), board.bottom() - 2.0);
+
+        let four = application_overlay_rects(board, 4);
+        assert_eq!(four.len(), 4);
+        assert_eq!(four[0].left(), four[1].left());
+        assert!(four[2].left() > four[0].left());
+        assert_eq!(four[2].top(), four[0].top());
+        assert!(four.iter().all(|rect| board.contains_rect(*rect)));
+        assert_eq!(four[3].bottom(), board.bottom() - 2.0);
     }
 
     #[test]
@@ -1847,27 +1817,6 @@ mod tests {
             exiting: false,
         };
 
-        egui::__run_test_ui(|ui| {
-            super::configure_style(ui.ctx());
-            ui.set_style((*ui.ctx().style_of(egui::Theme::Dark)).clone());
-            ui.set_width(108.0);
-            ui.set_height(WINDOW_CHIP_HEIGHT);
-            let bounds = ui.max_rect();
-            let first_application = app.snapshot.candidates[8].clone();
-            let card = app.application_window_chip(ui, &first_application);
-            assert!(
-                card.rect.height() <= WINDOW_CHIP_HEIGHT,
-                "application tile height {} exceeded allocation {}",
-                card.rect.height(),
-                WINDOW_CHIP_HEIGHT
-            );
-            assert!(
-                card.rect.bottom() <= bounds.bottom() + 1.0,
-                "application tile bottom {} exceeded bound {}",
-                card.rect.bottom(),
-                bounds.bottom()
-            );
-        });
         egui::__run_test_ui(|ui| {
             ui.set_width(320.0);
             ui.set_height(280.0);
@@ -1940,7 +1889,7 @@ mod tests {
                 bounds.bottom()
             );
         });
-        assert!((596.0..=597.0).contains(&super::desired_panel_height(&app.snapshot, 740.0)));
+        assert!((532.0..=533.0).contains(&super::desired_panel_height(&app.snapshot, 740.0)));
         assert!(super::desired_panel_height(&app.snapshot, 820.0) < super::PANEL_MAX_HEIGHT);
         assert_eq!(
             super::desired_panel_height(&UiSnapshot::default(), 740.0),
@@ -1949,7 +1898,7 @@ mod tests {
     }
 
     #[test]
-    fn fitted_height_keeps_final_poker_and_application_rows_visible() {
+    fn application_overlays_do_not_expand_panel_height() {
         let snapshot = UiSnapshot {
             candidates: (0..10)
                 .map(|index| CandidateView {
@@ -1979,7 +1928,7 @@ mod tests {
             ..UiSnapshot::default()
         };
 
-        assert_eq!(super::desired_panel_height(&snapshot, 740.0), 200.0);
+        assert_eq!(super::desired_panel_height(&snapshot, 740.0), 180.0);
     }
 
     #[test]

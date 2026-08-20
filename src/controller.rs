@@ -56,7 +56,6 @@ pub enum ControllerCommand {
         id: WindowId,
         mode: WindowMode,
     },
-    SetClubGgLobbiesMode(WindowMode),
     LocateClubGgLobbies,
     Locate(WindowId),
     SetHotkeys(HotkeySettings),
@@ -268,9 +267,6 @@ impl Controller {
                 self.arrange();
             }
             ControllerCommand::SetWindowMode { id, mode } => self.set_window_mode(id, mode),
-            ControllerCommand::SetClubGgLobbiesMode(mode) => {
-                self.set_clubgg_lobbies_mode(mode);
-            }
             ControllerCommand::LocateClubGgLobbies => self.locate_clubgg_lobbies(),
             ControllerCommand::Locate(id) => {
                 if let Err(error) = self.backend.locate(id) {
@@ -313,14 +309,23 @@ impl Controller {
     }
 
     fn set_window_mode(&mut self, id: WindowId, mode: WindowMode) {
-        let Some((signature, poker_client)) = self
+        let Some((signature, poker_client, is_clubgg_lobby)) = self
             .candidates
             .iter()
             .find(|candidate| candidate.id == id)
-            .map(|candidate| (candidate.signature.clone(), candidate.poker_client))
+            .map(|candidate| {
+                (
+                    candidate.signature.clone(),
+                    candidate.poker_client,
+                    candidate.is_clubgg_lobby,
+                )
+            })
         else {
             return;
         };
+        if is_clubgg_lobby {
+            return;
+        }
         let disposition = match mode {
             WindowMode::Arranged => CandidateDisposition::Table,
             WindowMode::Parked => CandidateDisposition::Parked,
@@ -361,30 +366,6 @@ impl Controller {
             self.sync_poker_columns();
         }
         self.save_config();
-        self.arrange();
-    }
-
-    fn set_clubgg_lobbies_mode(&mut self, mode: WindowMode) {
-        let disposition = match mode {
-            WindowMode::Parked => CandidateDisposition::Parked,
-            WindowMode::TopRight => CandidateDisposition::TopRight,
-            WindowMode::Ignored => CandidateDisposition::Ignored,
-            WindowMode::Arranged | WindowMode::FreeSpace => return,
-        };
-        let signatures: HashSet<_> = self
-            .candidates
-            .iter()
-            .filter(|candidate| candidate.is_clubgg_lobby)
-            .map(|candidate| candidate.signature.clone())
-            .collect();
-        if signatures.is_empty() {
-            return;
-        }
-        for signature in signatures {
-            self.config.set_disposition(signature, disposition);
-        }
-        self.save_config();
-        self.reconcile(false);
         self.arrange();
     }
 
@@ -661,13 +642,10 @@ impl Controller {
         &self,
         candidate: &WindowCandidate,
     ) -> Option<CandidateDisposition> {
-        let saved = self.config.disposition_for(&candidate.signature);
         if candidate.is_clubgg_lobby {
-            return Some(match saved {
-                Some(CandidateDisposition::Table) | None => CandidateDisposition::Parked,
-                Some(disposition) => disposition,
-            });
+            return Some(CandidateDisposition::Parked);
         }
+        let saved = self.config.disposition_for(&candidate.signature);
         saved.or_else(|| {
             (candidate.poker_client.is_none())
                 .then(|| self.config.default_application_mode.disposition())
