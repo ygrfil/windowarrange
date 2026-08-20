@@ -17,6 +17,7 @@ use crate::{
         CandidateView, PokerClientKind, PokerSlotId, PokerSlotView, Rect, TableStatus, UiSnapshot,
         WindowId, WindowMode,
     },
+    rng_overlay::RngOverlay,
     tray::{TrayAction, TrayService, egui_icon},
     win32::{
         Win32Backend, acquire_single_instance, activate_existing_panel, apply_process_mitigations,
@@ -140,6 +141,7 @@ struct TableArrangerApp {
     settings_open: Arc<AtomicBool>,
     settings_focus_requested: bool,
     app_icon: Arc<egui::IconData>,
+    rng_overlay: RngOverlay,
     selected_table: Option<crate::model::WindowId>,
     exiting: bool,
 }
@@ -197,6 +199,7 @@ impl TableArrangerApp {
             settings_open: Arc::new(AtomicBool::new(false)),
             settings_focus_requested: false,
             app_icon,
+            rng_overlay: RngOverlay::new(),
             selected_table: None,
             exiting: false,
         }
@@ -287,6 +290,19 @@ impl TableArrangerApp {
             {
                 automatic = !automatic;
                 self.send(ControllerCommand::SetAutoArrange(automatic));
+            }
+            let rng_enabled = self.rng_overlay.enabled();
+            if ui
+                .add_sized(
+                    [64.0, 24.0],
+                    egui::Button::new(if rng_enabled { "RnG ON" } else { "RnG OFF" })
+                        .selected(rng_enabled),
+                )
+                .on_hover_text("Show or hide the 1–100 random number overlay")
+                .clicked()
+            {
+                self.rng_overlay
+                    .toggle(ui.ctx(), selected_work_area(&self.snapshot));
             }
             if ui
                 .add_sized(
@@ -1242,13 +1258,26 @@ impl eframe::App for TableArrangerApp {
                 self.workspace(ui);
             });
         self.show_settings_viewport(ui.ctx());
+        self.rng_overlay
+            .sync_work_area(selected_work_area(&self.snapshot));
         self.fit_panel_height(ui.ctx());
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.rng_overlay.stop();
         self.send(ControllerCommand::Shutdown);
         info!("Table Arranger Control stopped");
     }
+}
+
+fn selected_work_area(snapshot: &UiSnapshot) -> Rect {
+    snapshot
+        .selected_monitor
+        .as_ref()
+        .and_then(|id| snapshot.monitors.iter().find(|monitor| &monitor.id == id))
+        .or_else(|| snapshot.monitors.iter().find(|monitor| monitor.primary))
+        .or_else(|| snapshot.monitors.first())
+        .map_or_else(|| Rect::new(0, 0, 1920, 1080), |monitor| monitor.work_area)
 }
 
 fn desired_panel_height(snapshot: &UiSnapshot) -> f32 {
@@ -1835,6 +1864,7 @@ mod tests {
             settings_open: Arc::new(AtomicBool::new(false)),
             settings_focus_requested: false,
             app_icon: Arc::new(super::egui_icon()),
+            rng_overlay: crate::rng_overlay::RngOverlay::new(),
             selected_table: None,
             exiting: false,
         };
@@ -2029,6 +2059,7 @@ mod tests {
             settings_open: Arc::new(AtomicBool::new(false)),
             settings_focus_requested: false,
             app_icon: Arc::new(super::egui_icon()),
+            rng_overlay: crate::rng_overlay::RngOverlay::new(),
             selected_table: None,
             exiting: false,
         };

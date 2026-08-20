@@ -9,5 +9,6 @@ pub mod identity;
 pub mod layout;
 pub mod logging;
 pub mod model;
+pub mod rng_overlay;
 pub mod tray;
 pub mod win32;
