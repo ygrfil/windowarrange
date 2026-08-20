@@ -92,23 +92,40 @@ impl Default for AppConfig {
 
 impl AppConfig {
     #[must_use]
-    pub fn disposition_for(&self, signature: &WindowSignature) -> Option<CandidateDisposition> {
+    pub fn exact_disposition_for(
+        &self,
+        signature: &WindowSignature,
+    ) -> Option<CandidateDisposition> {
         self.detection_rules
             .iter()
             .rev()
             .find(|rule| &rule.signature == signature)
             .map(|rule| rule.disposition)
-            .or_else(|| {
-                self.detection_rules
-                    .iter()
-                    .rev()
-                    .find(|rule| {
-                        rule.signature.title_pattern.is_empty()
-                            && rule.signature.process_name == signature.process_name
-                            && rule.signature.class_name == signature.class_name
-                    })
-                    .map(|rule| rule.disposition)
-            })
+    }
+
+    #[must_use]
+    pub fn disposition_for(&self, signature: &WindowSignature) -> Option<CandidateDisposition> {
+        self.exact_disposition_for(signature).or_else(|| {
+            self.detection_rules
+                .iter()
+                .rev()
+                .find(|rule| {
+                    rule.signature.title_pattern.is_empty()
+                        && rule.signature.process_name == signature.process_name
+                        && rule.signature.class_name == signature.class_name
+                })
+                .map(|rule| rule.disposition)
+        })
+    }
+
+    pub fn remove_process_class_fallback(&mut self, signature: &WindowSignature) -> bool {
+        let before = self.detection_rules.len();
+        self.detection_rules.retain(|rule| {
+            !(rule.signature.title_pattern.is_empty()
+                && rule.signature.process_name == signature.process_name
+                && rule.signature.class_name == signature.class_name)
+        });
+        self.detection_rules.len() != before
     }
 
     pub fn set_disposition(

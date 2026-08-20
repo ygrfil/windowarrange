@@ -14,6 +14,8 @@ A Windows-only companion that arranges independently movable ClubGG and LDPlayer
 8. Parked tables move to their actual minimum sizes from the display's top-right toward the left. Each parked table gets its own ClubGG or Pokerrr 2 application-icon button beside **GGLobby**; left-click locates it and right-click unparks it, removing the button.
 9. Ordinary windows remain separate and default to Ignore. Choose Top-right to preserve size at the corner or Fill space to force the window into only the full-height strip remaining to the right after poker is laid out.
 
+Opening an additional poker table while another is parked starts the additional table Active. Parking one ClubGG or Pokerrr 2 table does not propagate to later tables from the same application.
+
 The mirrored board scales the selected monitor's working area into the compact panel. Active table tiles and muted numbered **Placeholders** targets retain their desktop-relative positions; parked tables stay out of the mirror and use their toolbar buttons instead. ClubGG lobbies default to Park, and **GGLobby** runs the ordinary Locate action for each lobby sequentially, raising it exactly where it is parked without resizing, repositioning, or changing its saved Park setting. Lobbies never consume table slots or preserved space. Ignored poker windows remain accessible in the compact unmanaged row.
 
 All dispositions, spatial slots, manual holes, monitor choice, hotkeys, and ordinary-window rules are remembered. Identical displayed poker names are treated as separate live windows and retain separate slots. Closing or ignoring a poker window releases its assigned occurrence from the slot immediately; with preservation enabled, the position remains as an anonymous empty target for another table.
@@ -43,6 +45,16 @@ Runtime diagnostics are written to:
 ## Build
 
 The repository pins Rust 1.97.1 and the exact dependency graph in `Cargo.lock`.
+
+For the easiest release build, double-click `Build-Release.cmd`. It keeps the console open, automatically advances the patch version when needed, checks formatting and Clippy, builds without tests, publishes both executable names under `dist`, and verifies their hashes.
+
+The equivalent PowerShell command is:
+
+```powershell
+.\build-release.ps1
+```
+
+To build without publishing or changing the version, use Cargo directly:
 
 ```powershell
 cargo build --release --locked
