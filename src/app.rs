@@ -38,7 +38,7 @@ const PLACEHOLDER_BADGE: egui::Color32 = egui::Color32::from_rgb(70, 94, 78);
 const PLACEHOLDER_LABEL: &str = "Placeholders";
 const CARD_ROW_GAP: f32 = 4.0;
 const MINIMUM_BOARD_HEIGHT: f32 = 62.0;
-const PANEL_CHROME_HEIGHT: f32 = 84.0;
+const PANEL_CHROME_HEIGHT: f32 = 50.0;
 const PANEL_MIN_HEIGHT: f32 = 180.0;
 const PANEL_MAX_HEIGHT: f32 = 620.0;
 const SETTINGS_WIDTH: f32 = 440.0;
@@ -1889,7 +1889,7 @@ mod tests {
                 bounds.bottom()
             );
         });
-        assert!((532.0..=533.0).contains(&super::desired_panel_height(&app.snapshot, 740.0)));
+        assert!((498.0..=499.0).contains(&super::desired_panel_height(&app.snapshot, 740.0)));
         assert!(super::desired_panel_height(&app.snapshot, 820.0) < super::PANEL_MAX_HEIGHT);
         assert_eq!(
             super::desired_panel_height(&UiSnapshot::default(), 740.0),
