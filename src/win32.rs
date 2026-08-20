@@ -44,15 +44,15 @@ use windows::{
                 EVENT_OBJECT_HIDE, EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, EnumWindows,
                 FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FindWindowW, FlashWindowEx, GA_ROOT,
                 GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE, GWL_STYLE, GetAncestor, GetClassLongPtrW,
-                GetClassNameW, GetCursorPos, GetForegroundWindow, GetMessageW, GetWindowLongPtrW,
-                GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-                HICON, HWND_TOP, ICON_BIG, ICON_SMALL, ICON_SMALL2, IsIconic, IsWindowVisible,
-                MINMAXINFO, MONITORINFOF_PRIMARY, MSG, OBJID_WINDOW, SET_WINDOW_POS_FLAGS,
-                SMTO_ABORTIFHUNG, SW_RESTORE, SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS,
-                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
-                SWP_SHOWWINDOW, SendMessageTimeoutW, SetForegroundWindow, SetWindowPos,
-                ShowWindowAsync, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_GETICON,
-                WM_GETMINMAXINFO, WS_CHILD, WS_DISABLED, WS_EX_TOOLWINDOW,
+                GetClassNameW, GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowRect,
+                GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, HICON, HWND_TOP,
+                ICON_BIG, ICON_SMALL, ICON_SMALL2, IsIconic, IsWindowVisible, MINMAXINFO,
+                MONITORINFOF_PRIMARY, MSG, OBJID_WINDOW, SET_WINDOW_POS_FLAGS, SMTO_ABORTIFHUNG,
+                SW_RESTORE, SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageTimeoutW,
+                SetForegroundWindow, SetWindowPos, ShowWindowAsync, WINEVENT_OUTOFCONTEXT,
+                WINEVENT_SKIPOWNPROCESS, WM_GETICON, WM_GETMINMAXINFO, WS_CHILD, WS_DISABLED,
+                WS_EX_TOOLWINDOW,
             },
         },
     },
@@ -367,11 +367,6 @@ impl WindowBackend for Win32Backend {
     fn locate(&self, id: WindowId) -> Result<(), BackendError> {
         let hwnd = hwnd_from_id(id);
         explicit_locate(hwnd)
-    }
-
-    fn foreground_window(&self) -> Option<WindowId> {
-        let hwnd = unsafe { GetForegroundWindow() };
-        (!hwnd.0.is_null()).then(|| id_from_hwnd(hwnd))
     }
 }
 

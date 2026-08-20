@@ -235,7 +235,6 @@ pub struct UiSnapshot {
     pub preserve_table_slots_requested: bool,
     pub preserve_table_slots_auto_suppressed: bool,
     pub default_application_mode: crate::config::ApplicationDefault,
-    pub aspect_ratio: f64,
     pub status_message: String,
     pub hotkeys: crate::config::HotkeySettings,
 }
@@ -254,7 +253,6 @@ impl Default for UiSnapshot {
             preserve_table_slots_requested: true,
             preserve_table_slots_auto_suppressed: false,
             default_application_mode: crate::config::ApplicationDefault::Ignored,
-            aspect_ratio: 4.0 / 3.0,
             status_message: "Starting…".to_owned(),
             hotkeys: crate::config::HotkeySettings::default(),
         }
@@ -277,5 +275,4 @@ pub trait WindowBackend: Send + Sync + 'static {
     fn move_resize(&self, id: WindowId, rect: Rect) -> Result<Rect, BackendError>;
     fn minimum_size(&self, id: WindowId, aspect_ratio: f64) -> Result<Size, BackendError>;
     fn locate(&self, id: WindowId) -> Result<(), BackendError>;
-    fn foreground_window(&self) -> Option<WindowId>;
 }

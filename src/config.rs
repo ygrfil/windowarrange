@@ -63,7 +63,6 @@ pub struct AppConfig {
     #[serde(alias = "reserve_two_slots")]
     pub preserve_table_slots: bool,
     pub default_application_mode: ApplicationDefault,
-    pub table_aspect_ratio: Option<f64>,
     pub detection_rules: Vec<DetectionRule>,
     pub table_order: Vec<WindowSignature>,
     pub poker_columns: Vec<PokerColumnAssignment>,
@@ -80,7 +79,6 @@ impl Default for AppConfig {
             auto_arrange: true,
             preserve_table_slots: true,
             default_application_mode: ApplicationDefault::Ignored,
-            table_aspect_ratio: None,
             detection_rules: Vec::new(),
             table_order: Vec::new(),
             poker_columns: Vec::new(),

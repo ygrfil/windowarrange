@@ -41,12 +41,6 @@ pub enum ControllerCommand {
     SetAutoArrange(bool),
     SetPreserveTableSlots(bool),
     SetDefaultApplicationMode(ApplicationDefault),
-    SetEnabled {
-        id: WindowId,
-        enabled: bool,
-    },
-    ToggleFocused,
-    ToggleSlot(usize),
     MoveToSlot {
         source: WindowId,
         destination: PokerSlotId,
@@ -238,22 +232,6 @@ impl Controller {
                 self.reconcile(false);
                 self.arrange();
             }
-            ControllerCommand::SetEnabled { id, enabled } => {
-                self.set_enabled(id, enabled);
-            }
-            ControllerCommand::ToggleFocused => {
-                if let Some(id) = self.backend.foreground_window()
-                    && let Some(index) = self.tables.iter().position(|table| table.id == id)
-                {
-                    let enabled = !self.tables[index].enabled;
-                    self.set_enabled(id, enabled);
-                }
-            }
-            ControllerCommand::ToggleSlot(slot) => {
-                if let Some(table) = self.tables.get(slot).cloned() {
-                    self.set_enabled(table.id, !table.enabled);
-                }
-            }
             ControllerCommand::MoveToSlot {
                 source,
                 destination,
@@ -283,33 +261,6 @@ impl Controller {
             }
             ControllerCommand::Shutdown => {}
         }
-    }
-
-    fn set_enabled(&mut self, id: WindowId, enabled: bool) {
-        let previous_order: Vec<_> = self.tables.iter().map(|table| table.id).collect();
-        let Some(index) = self.tables.iter().position(|table| table.id == id) else {
-            return;
-        };
-        if !enabled {
-            self.release_slot_for(id);
-        }
-        self.tables[index].enabled = enabled;
-        let disposition = if enabled {
-            CandidateDisposition::Table
-        } else {
-            CandidateDisposition::Parked
-        };
-        self.config
-            .set_disposition(self.tables[index].signature.clone(), disposition);
-        if enabled {
-            self.tables[index].status = TableStatus::Ready;
-        }
-        self.sync_poker_columns();
-        if !enabled {
-            self.restore_table_sequence(&previous_order);
-        }
-        self.save_config();
-        self.arrange();
     }
 
     fn set_window_mode(&mut self, id: WindowId, mode: WindowMode) {
@@ -344,7 +295,28 @@ impl Controller {
             self.config
                 .set_application_disposition(signature, disposition);
         }
-        self.save_config();
+        if poker_client.is_some()
+            && matches!(mode, WindowMode::Arranged | WindowMode::Parked)
+            && self.tables.iter().any(|table| table.id == id)
+        {
+            if mode == WindowMode::Parked {
+                self.window_statuses.remove(&id);
+                self.release_slot_for(id);
+            }
+            if let Some(index) = self.tables.iter().position(|table| table.id == id) {
+                self.tables[index].enabled = mode == WindowMode::Arranged;
+                if mode == WindowMode::Arranged {
+                    self.tables[index].status = TableStatus::Ready;
+                }
+            }
+            self.sync_poker_columns();
+            if mode == WindowMode::Parked {
+                self.restore_table_sequence(&previous_order);
+            }
+            self.save_config();
+            self.arrange();
+            return;
+        }
         if matches!(mode, WindowMode::Parked | WindowMode::Ignored) {
             self.window_statuses.remove(&id);
             self.release_slot_for(id);
@@ -598,18 +570,6 @@ impl Controller {
         self.window_statuses
             .retain(|id, _| self.candidates.iter().any(|candidate| candidate.id == *id));
         let positioned_set_changed = old_positioned_ids != self.positioned_window_ids();
-
-        if self.config.table_aspect_ratio.is_none() {
-            self.config.table_aspect_ratio = self
-                .tables
-                .iter()
-                .filter(|table| table.poker_client == PokerClientKind::ClubGg)
-                .filter_map(|table| table.last_active_rect.aspect_ratio())
-                .find(|ratio| (0.8..=2.5).contains(ratio));
-            if self.config.table_aspect_ratio.is_some() {
-                self.save_config();
-            }
-        }
 
         if self.selected_monitor().is_none()
             && let Some(primary) = self
@@ -1533,10 +1493,6 @@ impl Controller {
             preserve_table_slots_auto_suppressed: self.config.preserve_table_slots
                 && !preserve_table_slots,
             default_application_mode: self.config.default_application_mode,
-            aspect_ratio: self
-                .config
-                .table_aspect_ratio
-                .unwrap_or(DEFAULT_ASPECT_RATIO),
             status_message: self.status_message.clone(),
             hotkeys: self.config.hotkeys.clone(),
         };

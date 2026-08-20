@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -23,8 +23,9 @@ use crate::{
     rng_overlay::RngOverlay,
     tray::{TrayAction, TrayService, egui_icon},
     win32::{
-        Win32Backend, acquire_single_instance, activate_existing_panel, apply_process_mitigations,
-        move_panel_to_cursor, panel_is_visible, spawn_window_event_watcher, window_icon,
+        Win32Backend, WindowIcon, acquire_single_instance, activate_existing_panel,
+        apply_process_mitigations, move_panel_to_cursor, panel_is_visible,
+        spawn_window_event_watcher, window_icon,
     },
 };
 
@@ -47,6 +48,8 @@ const PANEL_MAX_HEIGHT: f32 = 620.0;
 const SETTINGS_WIDTH: f32 = 440.0;
 const SETTINGS_MIN_HEIGHT: f32 = 240.0;
 const SETTINGS_MAX_HEIGHT: f32 = 700.0;
+const ICON_QUEUE_CAPACITY: usize = 32;
+const ICON_WORKER_STACK_BYTES: usize = 256 * 1024;
 
 pub fn run() {
     let mitigation_result = apply_process_mitigations();
@@ -150,7 +153,48 @@ struct TableArrangerApp {
     rng_overlay: RngOverlay,
     selected_table: Option<crate::model::WindowId>,
     application_icons: HashMap<WindowId, Option<egui::TextureHandle>>,
+    icon_loader: ApplicationIconLoader,
     exiting: bool,
+}
+
+struct ApplicationIconLoader {
+    requests: Sender<WindowId>,
+    results: Receiver<(WindowId, Option<WindowIcon>)>,
+    pending: HashSet<WindowId>,
+}
+
+impl ApplicationIconLoader {
+    fn new(context: egui::Context) -> Self {
+        let (request_tx, request_rx) = bounded(ICON_QUEUE_CAPACITY);
+        let (result_tx, result_rx) = bounded(ICON_QUEUE_CAPACITY);
+        std::thread::Builder::new()
+            .name("window-icon-loader".to_owned())
+            .stack_size(ICON_WORKER_STACK_BYTES)
+            .spawn(move || {
+                while let Ok(id) = request_rx.recv() {
+                    if result_tx.send((id, window_icon(id))).is_err() {
+                        break;
+                    }
+                    context.request_repaint();
+                }
+            })
+            .expect("window icon loader thread must start");
+        Self {
+            requests: request_tx,
+            results: result_rx,
+            pending: HashSet::new(),
+        }
+    }
+
+    fn request(&mut self, id: WindowId) {
+        if self.pending.insert(id) && self.requests.try_send(id).is_err() {
+            self.pending.remove(&id);
+        }
+    }
+
+    fn retain(&mut self, live: impl Fn(WindowId) -> bool) {
+        self.pending.retain(|id| live(*id));
+    }
 }
 
 struct SettingsViewportState {
@@ -209,6 +253,7 @@ impl TableArrangerApp {
             rng_overlay: RngOverlay::new(),
             selected_table: None,
             application_icons: HashMap::new(),
+            icon_loader: ApplicationIconLoader::new(creation.egui_ctx.clone()),
             exiting: false,
         }
     }
@@ -244,11 +289,36 @@ impl TableArrangerApp {
                     .iter()
                     .any(|candidate| candidate.id == *id)
             });
+            self.icon_loader.retain(|id| {
+                snapshot
+                    .candidates
+                    .iter()
+                    .any(|candidate| candidate.id == id)
+            });
             self.snapshot = Arc::clone(&snapshot);
             lock_settings(&self.settings).snapshot = snapshot;
             if self.settings_open.load(Ordering::Acquire) {
                 context.request_repaint_of(settings_viewport_id());
             }
+        }
+        for (id, icon) in self.icon_loader.results.try_iter() {
+            self.icon_loader.pending.remove(&id);
+            if !self
+                .snapshot
+                .candidates
+                .iter()
+                .any(|candidate| candidate.id == id)
+            {
+                continue;
+            }
+            let texture = icon.map(|icon| {
+                context.load_texture(
+                    format!("application-icon-{}", id.0),
+                    egui::ColorImage::from_rgba_unmultiplied([icon.size, icon.size], &icon.rgba),
+                    egui::TextureOptions::LINEAR,
+                )
+            });
+            self.application_icons.insert(id, texture);
         }
         for id in self.hotkey_events.try_iter() {
             let Some(action) = self
@@ -422,7 +492,7 @@ impl TableArrangerApp {
     }
 
     fn parked_table_button(&mut self, ui: &mut egui::Ui, window: &CandidateView) -> egui::Response {
-        let texture = self.application_icon_texture(ui.ctx(), window.id);
+        let texture = self.application_icon_texture(window.id);
         let (rect, response) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
         let response = response.on_hover_text(format!(
             "{}\nLeft click: Locate\nRight click: Unpark",
@@ -585,7 +655,7 @@ impl TableArrangerApp {
             egui::StrokeKind::Inside,
         );
 
-        if let Some(texture) = self.application_icon_texture(ui.ctx(), window.id) {
+        if let Some(texture) = self.application_icon_texture(window.id) {
             let available_height = (rect.height() - 34.0).max(0.0);
             let app_icon_size = (rect.width() * 0.34)
                 .min(available_height * 0.48)
@@ -672,26 +742,13 @@ impl TableArrangerApp {
         }
     }
 
-    fn application_icon_texture(
-        &mut self,
-        context: &egui::Context,
-        id: WindowId,
-    ) -> Option<egui::TextureId> {
+    fn application_icon_texture(&mut self, id: WindowId) -> Option<egui::TextureId> {
+        if !self.application_icons.contains_key(&id) {
+            self.icon_loader.request(id);
+        }
         self.application_icons
-            .entry(id)
-            .or_insert_with(|| {
-                window_icon(id).map(|icon| {
-                    context.load_texture(
-                        format!("application-icon-{}", id.0),
-                        egui::ColorImage::from_rgba_unmultiplied(
-                            [icon.size, icon.size],
-                            &icon.rgba,
-                        ),
-                        egui::TextureOptions::LINEAR,
-                    )
-                })
-            })
-            .as_ref()
+            .get(&id)
+            .and_then(Option::as_ref)
             .map(egui::TextureHandle::id)
     }
 
@@ -1707,14 +1764,18 @@ fn configure_style(context: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex, atomic::AtomicBool};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex, atomic::AtomicBool},
+    };
 
     use crossbeam_channel::unbounded;
     use eframe::egui;
 
     use super::{
-        SETTINGS_MAX_HEIGHT, SettingsViewportState, TableArrangerApp, application_overlay_rects,
-        clickable_body_rects, settings_controls, slot_click_command, window_mode_rank,
+        ApplicationIconLoader, SETTINGS_MAX_HEIGHT, SettingsViewportState, TableArrangerApp,
+        application_overlay_rects, clickable_body_rects, settings_controls, slot_click_command,
+        window_mode_rank,
     };
     use crate::{
         config::HotkeySettings,
@@ -1893,6 +1954,8 @@ mod tests {
             app_icon: Arc::new(super::egui_icon()),
             rng_overlay: crate::rng_overlay::RngOverlay::new(),
             selected_table: None,
+            application_icons: HashMap::new(),
+            icon_loader: ApplicationIconLoader::new(egui::Context::default()),
             exiting: false,
         };
 
@@ -2071,6 +2134,8 @@ mod tests {
             app_icon: Arc::new(super::egui_icon()),
             rng_overlay: crate::rng_overlay::RngOverlay::new(),
             selected_table: None,
+            application_icons: HashMap::new(),
+            icon_loader: ApplicationIconLoader::new(egui::Context::default()),
             exiting: false,
         };
 

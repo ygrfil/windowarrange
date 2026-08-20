@@ -1,8 +1,6 @@
 use std::ffi::c_void;
 use std::fs;
-use std::mem::zeroed;
 use std::path::PathBuf;
-use std::ptr::{null, null_mut};
 use std::sync::{
     Mutex, MutexGuard, OnceLock,
     atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering},
@@ -10,6 +8,29 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 
 use eframe::egui;
+use windows::{
+    Win32::{
+        Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Graphics::Gdi::{
+            BeginPaint, CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET,
+            DEFAULT_PITCH, DT_CENTER, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, EndPaint,
+            FW_BOLD, FillRect, InvalidateRect, NONANTIALIASED_QUALITY, OUT_DEFAULT_PRECIS,
+            PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT, UpdateWindow,
+        },
+        UI::WindowsAndMessaging::{
+            AppendMenuW, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
+            DestroyMenu, DestroyWindow, DispatchMessageW, GetClientRect, GetCursorPos, GetMessageW,
+            HMENU, HWND_TOPMOST, IDC_ARROW, LWA_COLORKEY, LoadCursorW, MENU_ITEM_FLAGS, MF_CHECKED,
+            MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassW,
+            SW_SHOW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetForegroundWindow,
+            SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow, TPM_NONOTIFY,
+            TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_CLOSE, WM_DESTROY,
+            WM_LBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_TIMER, WNDCLASSW,
+            WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+        },
+    },
+    core::{PCWSTR, w},
+};
 
 use crate::model::Rect as WorkRect;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -55,8 +76,11 @@ impl RngOverlay {
             || old_bottom != work_area.bottom();
         let hwnd = WINDOW_HANDLE.load(Ordering::Acquire);
         if changed && hwnd != 0 {
-            unsafe {
-                PostMessageW(hwnd as Hwnd, WM_REPOSITION, 0, 0);
+            let hwnd = HWND(hwnd as *mut c_void);
+            if let Err(error) =
+                unsafe { PostMessageW(Some(hwnd), WM_REPOSITION, WPARAM(0), LPARAM(0)) }
+            {
+                log::warn!("could not reposition RnG overlay: {error}");
             }
         }
     }
@@ -65,8 +89,10 @@ impl RngOverlay {
         ACTIVE.store(false, Ordering::Release);
         let hwnd = WINDOW_HANDLE.load(Ordering::Acquire);
         if hwnd != 0 {
-            unsafe {
-                PostMessageW(hwnd as Hwnd, WM_CLOSE, 0, 0);
+            let hwnd = HWND(hwnd as *mut c_void);
+            if let Err(error) = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) }
+            {
+                log::warn!("could not stop RnG overlay: {error}");
             }
         }
     }
@@ -112,57 +138,7 @@ fn request_root_repaint() {
     }
 }
 
-type Hwnd = *mut c_void;
-type Hinstance = *mut c_void;
-type Hdc = *mut c_void;
-type Hbrush = *mut c_void;
-type Hfont = *mut c_void;
-type Hobject = *mut c_void;
-type Hcursor = *mut c_void;
-type Hmenu = *mut c_void;
-type Lparam = isize;
-type Wparam = usize;
-type Lresult = isize;
-
-const WM_DESTROY: u32 = 0x0002;
-const WM_CLOSE: u32 = 0x0010;
 const WM_REPOSITION: u32 = 0x8001;
-const WM_PAINT: u32 = 0x000F;
-const WM_TIMER: u32 = 0x0113;
-const WM_LBUTTONDOWN: u32 = 0x0201;
-const WM_RBUTTONDOWN: u32 = 0x0204;
-const WM_MOUSEWHEEL: u32 = 0x020A;
-const CS_HREDRAW: u32 = 0x0002;
-const CS_VREDRAW: u32 = 0x0001;
-const WS_POPUP: u32 = 0x80000000;
-const WS_VISIBLE: u32 = 0x10000000;
-const WS_EX_TOPMOST: u32 = 0x00000008;
-const WS_EX_TOOLWINDOW: u32 = 0x00000080;
-const WS_EX_LAYERED: u32 = 0x00080000;
-const LWA_COLORKEY: u32 = 0x00000001;
-const SW_SHOW: i32 = 5;
-const SWP_NOACTIVATE: u32 = 0x0010;
-const SWP_SHOWWINDOW: u32 = 0x0040;
-const MF_STRING: u32 = 0x0000;
-const MF_CHECKED: u32 = 0x0008;
-const MF_POPUP: u32 = 0x0010;
-const MF_SEPARATOR: u32 = 0x0800;
-const TPM_RIGHTBUTTON: u32 = 0x0002;
-const TPM_NONOTIFY: u32 = 0x0080;
-const TPM_RETURNCMD: u32 = 0x0100;
-const DT_CENTER: u32 = 0x00000001;
-const DT_VCENTER: u32 = 0x00000004;
-const DT_SINGLELINE: u32 = 0x00000020;
-const TRANSPARENT: i32 = 1;
-const FW_BOLD: i32 = 700;
-const DEFAULT_CHARSET: u32 = 1;
-const OUT_DEFAULT_PRECIS: u32 = 0;
-const CLIP_DEFAULT_PRECIS: u32 = 0;
-// Color-key transparency needs solid glyph pixels; antialiasing would blend
-// edge pixels with the invisible key color and create a faint halo.
-const NONANTIALIASED_QUALITY: u32 = 3;
-const DEFAULT_PITCH: u32 = 0;
-const IDC_ARROW: *const u16 = 32512usize as *const u16;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static WINDOW_HANDLE: AtomicIsize = AtomicIsize::new(0);
@@ -180,141 +156,6 @@ static NUMBER_COLOR: AtomicU32 = AtomicU32::new(0x00D5FF);
 static FONT_SIZE: AtomicI32 = AtomicI32::new(150);
 // 0 = top-left, 1 = top-right, 2 = bottom-left, 3 = bottom-right.
 static CORNER: AtomicU32 = AtomicU32::new(1);
-
-#[repr(C)]
-struct Point {
-    x: i32,
-    y: i32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Rect {
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-}
-
-#[repr(C)]
-struct PaintStruct {
-    hdc: Hdc,
-    erase: i32,
-    paint: Rect,
-    restore: i32,
-    inc_update: i32,
-    reserved: [u8; 32],
-}
-
-#[repr(C)]
-struct Msg {
-    hwnd: Hwnd,
-    message: u32,
-    w_param: Wparam,
-    l_param: Lparam,
-    time: u32,
-    point: Point,
-    private: u32,
-}
-
-#[repr(C)]
-struct WndClassW {
-    style: u32,
-    wnd_proc: Option<unsafe extern "system" fn(Hwnd, u32, Wparam, Lparam) -> Lresult>,
-    cls_extra: i32,
-    wnd_extra: i32,
-    instance: Hinstance,
-    icon: *mut c_void,
-    cursor: Hcursor,
-    background: Hbrush,
-    menu_name: *const u16,
-    class_name: *const u16,
-}
-
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn RegisterClassW(class: *const WndClassW) -> u16;
-    fn CreateWindowExW(
-        ex_style: u32,
-        class_name: *const u16,
-        window_name: *const u16,
-        style: u32,
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
-        parent: Hwnd,
-        menu: *mut c_void,
-        instance: Hinstance,
-        param: *mut c_void,
-    ) -> Hwnd;
-    fn DefWindowProcW(hwnd: Hwnd, msg: u32, w_param: Wparam, l_param: Lparam) -> Lresult;
-    fn ShowWindow(hwnd: Hwnd, command: i32) -> i32;
-    fn UpdateWindow(hwnd: Hwnd) -> i32;
-    fn GetMessageW(msg: *mut Msg, hwnd: Hwnd, min: u32, max: u32) -> i32;
-    fn TranslateMessage(msg: *const Msg) -> i32;
-    fn DispatchMessageW(msg: *const Msg) -> Lresult;
-    fn PostQuitMessage(exit_code: i32);
-    fn BeginPaint(hwnd: Hwnd, paint: *mut PaintStruct) -> Hdc;
-    fn EndPaint(hwnd: Hwnd, paint: *const PaintStruct) -> i32;
-    fn GetClientRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
-    fn FillRect(hdc: Hdc, rect: *const Rect, brush: Hbrush) -> i32;
-    fn DrawTextW(hdc: Hdc, text: *const u16, count: i32, rect: *mut Rect, format: u32) -> i32;
-    fn SetTimer(hwnd: Hwnd, id: usize, delay_ms: u32, callback: *mut c_void) -> usize;
-    fn InvalidateRect(hwnd: Hwnd, rect: *const Rect, erase: i32) -> i32;
-    fn LoadCursorW(instance: Hinstance, cursor_name: *const u16) -> Hcursor;
-    fn SetLayeredWindowAttributes(hwnd: Hwnd, color_key: u32, alpha: u8, flags: u32) -> i32;
-    fn DestroyWindow(hwnd: Hwnd) -> i32;
-    fn CreatePopupMenu() -> Hmenu;
-    fn AppendMenuW(menu: Hmenu, flags: u32, item: usize, text: *const u16) -> i32;
-    fn TrackPopupMenu(
-        menu: Hmenu,
-        flags: u32,
-        x: i32,
-        y: i32,
-        reserved: i32,
-        hwnd: Hwnd,
-        rect: *const Rect,
-    ) -> u32;
-    fn DestroyMenu(menu: Hmenu) -> i32;
-    fn GetCursorPos(point: *mut Point) -> i32;
-    fn SetForegroundWindow(hwnd: Hwnd) -> i32;
-    fn SetWindowPos(
-        hwnd: Hwnd,
-        insert_after: Hwnd,
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
-        flags: u32,
-    ) -> i32;
-    fn PostMessageW(hwnd: Hwnd, message: u32, w_param: Wparam, l_param: Lparam) -> i32;
-}
-
-#[link(name = "gdi32")]
-unsafe extern "system" {
-    fn CreateSolidBrush(color: u32) -> Hbrush;
-    fn DeleteObject(object: Hobject) -> i32;
-    fn SetTextColor(hdc: Hdc, color: u32) -> u32;
-    fn SetBkMode(hdc: Hdc, mode: i32) -> i32;
-    fn CreateFontW(
-        height: i32,
-        width: i32,
-        escapement: i32,
-        orientation: i32,
-        weight: i32,
-        italic: u32,
-        underline: u32,
-        strike_out: u32,
-        charset: u32,
-        out_precision: u32,
-        clip_precision: u32,
-        quality: u32,
-        pitch_and_family: u32,
-        face: *const u16,
-    ) -> Hfont;
-    fn SelectObject(hdc: Hdc, object: Hobject) -> Hobject;
-}
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
@@ -349,8 +190,11 @@ fn settings_path() -> PathBuf {
 
 fn save_settings() {
     let path = settings_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+    if let Some(parent) = path.parent()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        log::warn!("could not create RnG settings directory: {error}");
+        return;
     }
     let contents = format!(
         "interval={}\ncolor={}\nsize={}\ncorner={}\n",
@@ -359,7 +203,9 @@ fn save_settings() {
         FONT_SIZE.load(Ordering::Relaxed),
         CORNER.load(Ordering::Relaxed),
     );
-    let _ = fs::write(path, contents);
+    if let Err(error) = fs::write(path, contents) {
+        log::warn!("could not save RnG settings: {error}");
+    }
 }
 
 fn load_settings() {
@@ -397,40 +243,48 @@ fn load_settings() {
     SECONDS_LEFT.store(INTERVAL_SECONDS.load(Ordering::Relaxed), Ordering::Relaxed);
 }
 
-fn reroll(hwnd: Hwnd) {
+fn reroll(hwnd: HWND) {
     NUMBER.store(random_number(), Ordering::Relaxed);
     SECONDS_LEFT.store(INTERVAL_SECONDS.load(Ordering::Relaxed), Ordering::Relaxed);
     unsafe {
-        InvalidateRect(hwnd, null(), 0);
+        let _ = InvalidateRect(Some(hwnd), None, false);
     }
 }
 
-fn menu_flags(active: bool) -> u32 {
-    MF_STRING | if active { MF_CHECKED } else { 0 }
+fn menu_flags(active: bool) -> MENU_ITEM_FLAGS {
+    MF_STRING
+        | if active {
+            MF_CHECKED
+        } else {
+            MENU_ITEM_FLAGS(0)
+        }
 }
 
-unsafe fn add_menu_item(menu: Hmenu, id: usize, label: &str, active: bool) {
+unsafe fn add_menu_item(menu: HMENU, id: usize, label: &str, active: bool) {
     let label = wide(label);
-    unsafe {
-        AppendMenuW(menu, menu_flags(active), id, label.as_ptr());
+    if let Err(error) = unsafe { AppendMenuW(menu, menu_flags(active), id, PCWSTR(label.as_ptr())) }
+    {
+        log::warn!("could not add an RnG settings menu item: {error}");
     }
 }
 
-unsafe fn add_submenu(parent: Hmenu, submenu: Hmenu, label: &str) {
+unsafe fn add_submenu(parent: HMENU, submenu: HMENU, label: &str) {
     let label = wide(label);
-    unsafe {
-        AppendMenuW(parent, MF_POPUP, submenu as usize, label.as_ptr());
+    if let Err(error) =
+        unsafe { AppendMenuW(parent, MF_POPUP, submenu.0 as usize, PCWSTR(label.as_ptr())) }
+    {
+        log::warn!("could not add an RnG settings submenu: {error}");
     }
 }
 
-fn apply_layout(hwnd: Hwnd) {
+fn apply_layout(hwnd: HWND) {
     let font_size = FONT_SIZE.load(Ordering::Relaxed);
     // Leave enough invisible space for three wide digits plus the font's full
     // ascent/descent. A tight box clips small glyphs at their baseline.
     let width = (font_size * 5 / 2 + 32).max(140);
     let height = (font_size * 3 / 2 + 32).max(100);
     let margin = 24;
-    let work_area = Rect {
+    let work_area = RECT {
         left: WORK_LEFT.load(Ordering::Acquire),
         top: WORK_TOP.load(Ordering::Acquire),
         right: WORK_RIGHT.load(Ordering::Acquire),
@@ -447,36 +301,62 @@ fn apply_layout(hwnd: Hwnd) {
     } else {
         work_area.bottom - height - margin
     };
-    let topmost = -1isize as Hwnd;
-    unsafe {
+    if let Err(error) = unsafe {
         SetWindowPos(
             hwnd,
-            topmost,
+            Some(HWND_TOPMOST),
             x,
             y,
             width,
             height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        );
+        )
+    } {
+        log::warn!("could not position RnG overlay: {error}");
     }
     unsafe {
-        InvalidateRect(hwnd, null(), 0);
+        let _ = InvalidateRect(Some(hwnd), None, false);
     }
 }
 
-fn adjust_size(hwnd: Hwnd, change: i32) {
+fn adjust_size(hwnd: HWND, change: i32) {
     let current = FONT_SIZE.load(Ordering::Relaxed);
     FONT_SIZE.store((current + change).clamp(40, 400), Ordering::Relaxed);
     save_settings();
     apply_layout(hwnd);
 }
 
-unsafe fn show_settings(hwnd: Hwnd) {
-    let root = unsafe { CreatePopupMenu() };
-    let interval = unsafe { CreatePopupMenu() };
-    let colors = unsafe { CreatePopupMenu() };
-    let sizes = unsafe { CreatePopupMenu() };
-    let corners = unsafe { CreatePopupMenu() };
+unsafe fn show_settings(hwnd: HWND) {
+    let Ok(root) = (unsafe { CreatePopupMenu() }) else {
+        log::warn!("could not create the RnG settings menu");
+        return;
+    };
+    let Ok(interval) = (unsafe { CreatePopupMenu() }) else {
+        let _ = unsafe { DestroyMenu(root) };
+        log::warn!("could not create the RnG interval menu");
+        return;
+    };
+    let Ok(colors) = (unsafe { CreatePopupMenu() }) else {
+        let _ = unsafe { DestroyMenu(root) };
+        let _ = unsafe { DestroyMenu(interval) };
+        log::warn!("could not create the RnG color menu");
+        return;
+    };
+    let Ok(sizes) = (unsafe { CreatePopupMenu() }) else {
+        let _ = unsafe { DestroyMenu(root) };
+        let _ = unsafe { DestroyMenu(interval) };
+        let _ = unsafe { DestroyMenu(colors) };
+        log::warn!("could not create the RnG size menu");
+        return;
+    };
+    let Ok(corners) = (unsafe { CreatePopupMenu() }) else {
+        let _ = unsafe { DestroyMenu(root) };
+        let _ = unsafe { DestroyMenu(interval) };
+        let _ = unsafe { DestroyMenu(colors) };
+        let _ = unsafe { DestroyMenu(sizes) };
+        log::warn!("could not create the RnG corner menu");
+        return;
+    };
 
     let current_interval = INTERVAL_SECONDS.load(Ordering::Relaxed);
     unsafe {
@@ -553,18 +433,20 @@ unsafe fn show_settings(hwnd: Hwnd) {
         add_submenu(root, corners, "Corner");
     }
     unsafe {
-        AppendMenuW(root, MF_SEPARATOR, 0, null());
+        if let Err(error) = AppendMenuW(root, MF_SEPARATOR, 0, PCWSTR::null()) {
+            log::warn!("could not add the RnG menu separator: {error}");
+        }
     }
     unsafe {
         add_menu_item(root, 900, "Turn RnG off", false);
     }
 
-    let mut cursor = Point { x: 0, y: 0 };
-    unsafe {
-        GetCursorPos(&mut cursor);
+    let mut cursor = POINT::default();
+    if let Err(error) = unsafe { GetCursorPos(&mut cursor) } {
+        log::warn!("could not read the cursor position for the RnG menu: {error}");
     }
     unsafe {
-        SetForegroundWindow(hwnd);
+        let _ = SetForegroundWindow(hwnd);
     }
     let command = unsafe {
         TrackPopupMenu(
@@ -572,11 +454,12 @@ unsafe fn show_settings(hwnd: Hwnd) {
             TPM_RIGHTBUTTON | TPM_NONOTIFY | TPM_RETURNCMD,
             cursor.x,
             cursor.y,
-            0,
+            None,
             hwnd,
-            null(),
+            None,
         )
-    };
+    }
+    .0 as u32;
 
     match command {
         110 => INTERVAL_SECONDS.store(10, Ordering::Relaxed),
@@ -598,7 +481,9 @@ unsafe fn show_settings(hwnd: Hwnd) {
         403 => CORNER.store(2, Ordering::Relaxed),
         404 => CORNER.store(3, Ordering::Relaxed),
         900 => unsafe {
-            DestroyWindow(hwnd);
+            if let Err(error) = DestroyWindow(hwnd) {
+                log::warn!("could not close the RnG overlay: {error}");
+            }
         },
         _ => {}
     }
@@ -613,26 +498,26 @@ unsafe fn show_settings(hwnd: Hwnd) {
         apply_layout(hwnd);
     } else if command != 0 && command != 900 {
         unsafe {
-            InvalidateRect(hwnd, null(), 0);
+            let _ = InvalidateRect(Some(hwnd), None, false);
         }
     }
-    unsafe {
-        DestroyMenu(root);
+    if let Err(error) = unsafe { DestroyMenu(root) } {
+        log::warn!("could not destroy the RnG settings menu: {error}");
     }
 }
 
 unsafe extern "system" fn window_proc(
-    hwnd: Hwnd,
+    hwnd: HWND,
     msg: u32,
-    w_param: Wparam,
-    l_param: Lparam,
-) -> Lresult {
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
     match msg {
         WM_PAINT => {
             unsafe {
                 paint(hwnd);
             }
-            0
+            LRESULT(0)
         }
         WM_TIMER => {
             let remaining = SECONDS_LEFT.fetch_sub(1, Ordering::Relaxed) - 1;
@@ -640,34 +525,34 @@ unsafe extern "system" fn window_proc(
                 reroll(hwnd);
             } else {
                 unsafe {
-                    InvalidateRect(hwnd, null(), 0);
+                    let _ = InvalidateRect(Some(hwnd), None, false);
                 }
             }
-            0
+            LRESULT(0)
         }
         WM_LBUTTONDOWN => {
             // The number is the control: click anywhere to generate immediately.
             reroll(hwnd);
-            0
+            LRESULT(0)
         }
         WM_RBUTTONDOWN => {
             unsafe {
                 show_settings(hwnd);
             }
-            0
+            LRESULT(0)
         }
         WM_MOUSEWHEEL => {
-            let wheel_delta = ((w_param >> 16) & 0xFFFF) as u16 as i16;
+            let wheel_delta = ((w_param.0 >> 16) & 0xFFFF) as u16 as i16;
             if wheel_delta > 0 {
                 adjust_size(hwnd, 5);
             } else if wheel_delta < 0 {
                 adjust_size(hwnd, -5);
             }
-            0
+            LRESULT(0)
         }
         WM_REPOSITION => {
             apply_layout(hwnd);
-            0
+            LRESULT(0)
         }
         WM_DESTROY => {
             WINDOW_HANDLE.store(0, Ordering::Release);
@@ -676,41 +561,44 @@ unsafe extern "system" fn window_proc(
             unsafe {
                 PostQuitMessage(0);
             }
-            0
+            LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, w_param, l_param) },
     }
 }
 
-unsafe fn paint(hwnd: Hwnd) {
-    let mut paint: PaintStruct = unsafe { zeroed() };
+unsafe fn paint(hwnd: HWND) {
+    let mut paint = PAINTSTRUCT::default();
     let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
-    let mut client: Rect = unsafe { zeroed() };
-    unsafe {
-        GetClientRect(hwnd, &mut client);
+    let mut client = RECT::default();
+    if let Err(error) = unsafe { GetClientRect(hwnd, &mut client) } {
+        log::warn!("could not read the RnG overlay bounds: {error}");
+        unsafe {
+            let _ = EndPaint(hwnd, &paint);
+        }
+        return;
     }
 
     // This exact color is removed by the layered-window color key, leaving
     // only the painted yellow number visible on the desktop.
-    let background = unsafe { CreateSolidBrush(rgb(1, 2, 3)) };
+    let background = unsafe { CreateSolidBrush(COLORREF(rgb(1, 2, 3))) };
     unsafe {
         FillRect(hdc, &client, background);
     }
     unsafe {
-        DeleteObject(background);
+        let _ = DeleteObject(background.into());
     }
     unsafe {
         SetBkMode(hdc, TRANSPARENT);
     }
 
-    let face = wide("Segoe UI");
     let number_font = unsafe {
         CreateFontW(
             -FONT_SIZE.load(Ordering::Relaxed),
             0,
             0,
             0,
-            FW_BOLD,
+            FW_BOLD.0 as i32,
             0,
             0,
             0,
@@ -718,19 +606,23 @@ unsafe fn paint(hwnd: Hwnd) {
             OUT_DEFAULT_PRECIS,
             CLIP_DEFAULT_PRECIS,
             NONANTIALIASED_QUALITY,
-            DEFAULT_PITCH,
-            face.as_ptr(),
+            u32::from(DEFAULT_PITCH.0),
+            w!("Segoe UI"),
         )
     };
-    let old = unsafe { SelectObject(hdc, number_font) };
+    let old = unsafe { SelectObject(hdc, number_font.into()) };
     unsafe {
-        SetTextColor(hdc, NUMBER_COLOR.load(Ordering::Relaxed));
+        SetTextColor(hdc, COLORREF(NUMBER_COLOR.load(Ordering::Relaxed)));
     }
-    let number_text = wide(&NUMBER.load(Ordering::Relaxed).to_string());
+    let mut number_text: Vec<_> = NUMBER
+        .load(Ordering::Relaxed)
+        .to_string()
+        .encode_utf16()
+        .collect();
     // Draw into nearly the whole transparent window. The window dimensions
     // already provide scalable padding, so this rect never becomes shorter
     // than the selected font.
-    let mut number_rect = Rect {
+    let mut number_rect = RECT {
         left: 8,
         top: 8,
         right: client.right - 8,
@@ -739,8 +631,7 @@ unsafe fn paint(hwnd: Hwnd) {
     unsafe {
         DrawTextW(
             hdc,
-            number_text.as_ptr(),
-            -1,
+            &mut number_text,
             &mut number_rect,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE,
         );
@@ -750,10 +641,10 @@ unsafe fn paint(hwnd: Hwnd) {
         SelectObject(hdc, old);
     }
     unsafe {
-        DeleteObject(number_font);
+        let _ = DeleteObject(number_font.into());
     }
     unsafe {
-        EndPaint(hwnd, &paint);
+        let _ = EndPaint(hwnd, &paint);
     }
 }
 
@@ -761,59 +652,81 @@ fn run_native_overlay() {
     load_settings();
     NUMBER.store(random_number(), Ordering::Relaxed);
     unsafe {
-        let instance = null_mut();
-        let class_name = wide("TableArrangerRngOverlayWindow");
-        let class = WndClassW {
-            style: CS_HREDRAW | CS_VREDRAW,
-            wnd_proc: Some(window_proc),
-            cls_extra: 0,
-            wnd_extra: 0,
-            instance,
-            icon: null_mut(),
-            cursor: LoadCursorW(null_mut(), IDC_ARROW),
-            background: null_mut(),
-            menu_name: null(),
-            class_name: class_name.as_ptr(),
+        let class_name = w!("TableArrangerRngOverlayWindow");
+        let cursor = match LoadCursorW(None, IDC_ARROW) {
+            Ok(cursor) => cursor,
+            Err(error) => {
+                ACTIVE.store(false, Ordering::Release);
+                log::error!("could not load the RnG cursor: {error}");
+                request_root_repaint();
+                return;
+            }
         };
-        let _ = RegisterClassW(&class);
+        let class = WNDCLASSW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(window_proc),
+            hCursor: cursor,
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        if RegisterClassW(&class) == 0 {
+            log::debug!("RnG window class was already registered or could not be registered");
+        }
 
-        let title = wide("Table Arranger Control — RnG");
         let width = 280;
         let height = 180;
-        let hwnd = CreateWindowExW(
+        let hwnd = match CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-            class_name.as_ptr(),
-            title.as_ptr(),
+            class_name,
+            w!("Table Arranger Control — RnG"),
             WS_POPUP | WS_VISIBLE,
             0,
             0,
             width,
             height,
-            null_mut(),
-            null_mut(),
-            instance,
-            null_mut(),
-        );
-        if hwnd.is_null() {
-            ACTIVE.store(false, Ordering::Release);
-            request_root_repaint();
-            return;
-        }
-        WINDOW_HANDLE.store(hwnd as isize, Ordering::Release);
+            None,
+            None,
+            None,
+            None,
+        ) {
+            Ok(hwnd) => hwnd,
+            Err(error) => {
+                ACTIVE.store(false, Ordering::Release);
+                log::error!("could not create the RnG overlay window: {error}");
+                request_root_repaint();
+                return;
+            }
+        };
+        WINDOW_HANDLE.store(hwnd.0 as isize, Ordering::Release);
         if !ACTIVE.load(Ordering::Acquire) {
-            DestroyWindow(hwnd);
+            let _ = DestroyWindow(hwnd);
             return;
         }
-        SetLayeredWindowAttributes(hwnd, rgb(1, 2, 3), 0, LWA_COLORKEY);
+        if let Err(error) =
+            SetLayeredWindowAttributes(hwnd, COLORREF(rgb(1, 2, 3)), 0, LWA_COLORKEY)
+        {
+            log::error!("could not enable RnG overlay transparency: {error}");
+            let _ = DestroyWindow(hwnd);
+            return;
+        }
         apply_layout(hwnd);
-        SetTimer(hwnd, 1, 1000, null_mut());
-        ShowWindow(hwnd, SW_SHOW);
-        UpdateWindow(hwnd);
+        if SetTimer(Some(hwnd), 1, 1000, None) == 0 {
+            log::warn!("could not start the RnG interval timer");
+        }
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = UpdateWindow(hwnd);
 
-        let mut msg: Msg = zeroed();
-        while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+        let mut msg = MSG::default();
+        loop {
+            let result = GetMessageW(&mut msg, None, 0, 0).0;
+            if result <= 0 {
+                if result < 0 {
+                    log::error!("RnG overlay message loop failed");
+                }
+                break;
+            }
+            let _ = TranslateMessage(&msg);
+            let _ = DispatchMessageW(&msg);
         }
         WINDOW_HANDLE.store(0, Ordering::Release);
         ACTIVE.store(false, Ordering::Release);

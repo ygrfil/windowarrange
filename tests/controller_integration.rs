@@ -11,7 +11,7 @@ use std::{
 use clubgg_table_arranger::{
     config::{AppConfig, ApplicationDefault, ConfigStore},
     controller::{ControllerCommand, spawn_controller},
-    layout::{calculate_layout, right_side_free_rect},
+    layout::{PokerColumnSpec, calculate_mixed_layout, right_side_free_rect},
     model::{
         BackendError, MonitorInfo, PokerClientKind, PokerColumnAssignment, PokerSlotId, Rect, Size,
         TableStatus, UiSnapshot, WindowBackend, WindowCandidate, WindowId, WindowMode,
@@ -26,7 +26,6 @@ struct MockBackend {
     candidates: Arc<Mutex<Vec<WindowCandidate>>>,
     moves: Arc<Mutex<Vec<(WindowId, Rect)>>>,
     located: Arc<Mutex<Vec<WindowId>>>,
-    foreground: Arc<Mutex<Option<WindowId>>>,
     deny_moves: Arc<AtomicBool>,
     minimum_sizes: Arc<Mutex<HashMap<WindowId, Size>>>,
 }
@@ -38,7 +37,6 @@ impl MockBackend {
             candidates: Arc::new(Mutex::new(candidates)),
             moves: Arc::new(Mutex::new(Vec::new())),
             located: Arc::new(Mutex::new(Vec::new())),
-            foreground: Arc::new(Mutex::new(None)),
             deny_moves: Arc::new(AtomicBool::new(false)),
             minimum_sizes: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -80,10 +78,6 @@ impl WindowBackend for MockBackend {
     fn locate(&self, id: WindowId) -> Result<(), BackendError> {
         self.located.lock().unwrap().push(id);
         Ok(())
-    }
-
-    fn foreground_window(&self) -> Option<WindowId> {
-        *self.foreground.lock().unwrap()
     }
 }
 
@@ -218,9 +212,9 @@ fn closing_disabling_and_reordering_preserve_relative_order() {
 
     handle
         .commands
-        .send(ControllerCommand::SetEnabled {
+        .send(ControllerCommand::SetWindowMode {
             id: WindowId(2),
-            enabled: false,
+            mode: WindowMode::Parked,
         })
         .unwrap();
     let disabled = wait_for_snapshot(&handle.snapshots, |snapshot| {
@@ -378,9 +372,9 @@ fn parking_a_left_ldplayer_column_does_not_move_active_clubgg_tables() {
 
     handle
         .commands
-        .send(ControllerCommand::SetEnabled {
+        .send(ControllerCommand::SetWindowMode {
             id: WindowId(9),
-            enabled: false,
+            mode: WindowMode::Parked,
         })
         .unwrap();
     let parked = wait_for_snapshot(&handle.snapshots, |snapshot| {
@@ -650,9 +644,9 @@ fn preserve_slots_auto_suppresses_for_two_busy_columns_and_restores_after_park()
 
     handle
         .commands
-        .send(ControllerCommand::SetEnabled {
+        .send(ControllerCommand::SetWindowMode {
             id: WindowId(9),
-            enabled: false,
+            mode: WindowMode::Parked,
         })
         .unwrap();
     let still_disabled = wait_for_snapshot(&handle.snapshots, |snapshot| {
@@ -686,9 +680,9 @@ fn parking_one_table_preserves_every_other_tables_slot() {
 
     handle
         .commands
-        .send(ControllerCommand::SetEnabled {
+        .send(ControllerCommand::SetWindowMode {
             id: WindowId(1),
-            enabled: false,
+            mode: WindowMode::Parked,
         })
         .unwrap();
     let parked = wait_for_snapshot(&handle.snapshots, |snapshot| {
@@ -735,9 +729,9 @@ fn parking_one_table_preserves_every_other_tables_slot() {
 
     handle
         .commands
-        .send(ControllerCommand::SetEnabled {
+        .send(ControllerCommand::SetWindowMode {
             id: WindowId(1),
-            enabled: false,
+            mode: WindowMode::Parked,
         })
         .unwrap();
     let _ = wait_for_snapshot(&handle.snapshots, |snapshot| {
@@ -786,9 +780,9 @@ fn parking_many_tables_preserves_the_surviving_tables_column() {
     for id in 1..=4 {
         handle
             .commands
-            .send(ControllerCommand::SetEnabled {
+            .send(ControllerCommand::SetWindowMode {
                 id: WindowId(id),
-                enabled: false,
+                mode: WindowMode::Parked,
             })
             .unwrap();
     }
@@ -879,9 +873,9 @@ fn parked_tables_line_up_from_top_right_without_overlap() {
     for id in 1..=3 {
         handle
             .commands
-            .send(ControllerCommand::SetEnabled {
+            .send(ControllerCommand::SetWindowMode {
                 id: WindowId(id),
-                enabled: false,
+                mode: WindowMode::Parked,
             })
             .unwrap();
         let _ = wait_for_snapshot(&handle.snapshots, |snapshot| {
@@ -1343,8 +1337,17 @@ fn ordinary_windows_default_to_ignore_and_can_use_free_space_or_top_right() {
                 .contains("positioned 1 application window")
     });
     assert_eq!(filled.tables.len(), 2);
-    let table_layout = calculate_layout(Rect::new(0, 0, 2752, 1104), 2, 4.0 / 3.0);
-    let expected_free = right_side_free_rect(Rect::new(0, 0, 2752, 1104), &table_layout.rectangles);
+    let work_area = Rect::new(0, 0, 2752, 1104);
+    let table_layout = calculate_mixed_layout(
+        work_area,
+        &[PokerColumnSpec::ClubGg, PokerColumnSpec::ClubGg],
+    );
+    let occupied: Vec<_> = table_layout
+        .columns
+        .iter()
+        .map(|column| column.bounds)
+        .collect();
+    let expected_free = right_side_free_rect(work_area, &occupied);
     assert!(
         backend
             .moves
@@ -1487,8 +1490,16 @@ fn fill_space_obeys_the_poker_border_even_when_narrower_than_its_minimum() {
 #[test]
 fn preserved_two_column_boundary_defaults_on_with_zero_or_one_open_table() {
     let work_area = Rect::new(0, 0, 2752, 1104);
-    let reserved_layout = calculate_layout(work_area, 2, 4.0 / 3.0);
-    let expected_free = right_side_free_rect(work_area, &reserved_layout.rectangles);
+    let reserved_layout = calculate_mixed_layout(
+        work_area,
+        &[PokerColumnSpec::ClubGg, PokerColumnSpec::ClubGg],
+    );
+    let occupied: Vec<_> = reserved_layout
+        .columns
+        .iter()
+        .map(|column| column.bounds)
+        .collect();
+    let expected_free = right_side_free_rect(work_area, &occupied);
 
     for table_count in [0, 1] {
         let backend = MockBackend::with_tables(table_count);
