@@ -31,20 +31,19 @@ impl ApplicationDefault {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
 pub struct HotkeySettings {
     pub arrange_now: String,
-    pub toggle_focused: String,
     pub show_panel: String,
-    pub toggle_slots: Vec<String>,
+    pub locate_clubgg_lobbies: String,
 }
 
 impl Default for HotkeySettings {
     fn default() -> Self {
         Self {
             arrange_now: "Ctrl+Shift+A".to_owned(),
-            toggle_focused: "Ctrl+Shift+T".to_owned(),
             show_panel: "Ctrl+Shift+P".to_owned(),
-            toggle_slots: (1..=8).map(|slot| format!("Ctrl+Shift+F{slot}")).collect(),
+            locate_clubgg_lobbies: "Ctrl+Shift+G".to_owned(),
         }
     }
 }

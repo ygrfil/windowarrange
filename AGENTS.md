@@ -72,9 +72,9 @@ Default section order:
 - Preserve table focus and Z-order while arranging. The explicit user-clicked **Locate** action is the only exception: restore, allow owned-window chains such as ClubGG lobbies to rise, and request foreground focus for that selected window. Keep this native sequence simple and never surprise-move real ClubGG windows from automated tests.
 - Anchor poker layouts at the selected monitor's top-left working area. Keep ClubGG tables equal and 4:3 in two-high columns `(1/2)`, `(3/4)`, `(5/6)`; keep each LDPlayer/Pokerrr 2 window in a separate full-height column using at least its natural 9:16 portrait ratio while retaining any wider detected ratio. Use full work-area height when the mixed columns fit and reduce their shared height only when required to avoid overlap.
 - Support stable ordering, automatic reflow, enabled/parked tables, configurable hotkeys, a floating panel, and tray operation.
-- Use the same configurable panel hotkey to hide a visible panel and restore/show a hidden or minimized panel.
+- Use the same configurable panel hotkey to hide a visible panel and restore/show a hidden or minimized panel centered around the mouse pointer and clamped inside that monitor's work area.
 - Integrate the optional **RnG** number overlay into the main executable. Its toolbar toggle starts and stops a transparent always-on-top number from 1–100 on the selected display; primary click rerolls immediately, right-click exposes interval, color, size, and corner settings, and those settings survive relaunches while the overlay starts Off.
-- Discover normal visible top-level application windows while excluding the arranger, desktop/taskbar shell surfaces, cloaked windows, child windows, disabled windows, and tool windows. Recognize untitled, exact-title, and explicitly lobby-titled ClubGG surfaces as ancillary **ClubGG lobby** windows; keep every detected lobby permanently Parked, expose only the toolbar **GGLobby** sequential-Locate action, and never let lobbies consume a poker slot, table number/hotkey, ghost, preserved column, or ordinary-window tile. Treat eligible `dnplayer.exe` main windows as LDPlayer poker tables while excluding LDPlayer headless and service processes.
+- Discover normal visible top-level application windows while excluding the arranger, desktop/taskbar shell surfaces, cloaked windows, child windows, disabled windows, and tool windows. Recognize untitled, exact-title, and explicitly lobby-titled ClubGG surfaces as ancillary **ClubGG lobby** windows; keep every detected lobby permanently Parked, expose the toolbar **GGLobby** sequential-Locate action and its configurable shortcut, and never let lobbies consume a poker slot, table number, table shortcut, ghost, preserved column, or ordinary-window tile. Treat eligible `dnplayer.exe` main windows as LDPlayer poker tables while excluding LDPlayer headless and service processes.
 - Show selected poker and application windows first, then parked poker tables, then ignored windows, with stable session order inside each group. Screen movement must never reorder rows within a group, and signature-based choices must survive restarts.
 - Default likely ClubGG and LDPlayer poker tables to **Arrange**. The configurable ordinary-window default starts at **Ignore** and may be changed in Settings to **Top-right** or **Fill space**; an explicit saved window rule always overrides the default.
 - **Top-right** preserves an ordinary window's current size and anchors it to the selected display's top-right. Lay out poker first. **Fill space** then resizes an ordinary window into the exact full-height vertical strip between the rightmost active poker-table edge and the selected display's right edge, even when that strip is narrower than the application's reported minimum size; it must never remain at stale overlapping geometry or use space below poker tables. Multiple selected ordinary windows share that strip.
@@ -117,14 +117,8 @@ Default section order:
 
 ## Verification
 
-Before delivery, run:
-
-- `cargo fmt --check`
-- `cargo clippy --all-targets --all-features -- -D warnings`
-- `cargo test --all-targets`
-- `cargo tree -d`
-- `cargo audit`
-- `cargo build --release --locked`
+- For small, dependency-neutral features, default to token-saving verification: run `cargo fmt --check`, `cargo clippy --bin table-arranger-control --all-features -- -D warnings`, and `cargo build --release --locked`. Skip tests, `cargo tree -d`, and `cargo audit` unless the user asks for them or the change materially affects dependencies, persistence integrity, native safety, or broad behavior.
+- For broader or high-risk changes, or when explicitly requested, run `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-targets`, `cargo tree -d`, `cargo audit`, and `cargo build --release --locked`.
 
 ## Closeout
 
@@ -147,7 +141,8 @@ Before delivery, run:
 - Do not immediately undo manual moves; wait until the next structural reflow or explicit arrange action.
 - Reflect a manual on-screen table reorder in the UI mirror and persist the resulting slot order.
 - Leave disabled tables parked when the arranger exits.
-- Keep all ClubGG lobbies permanently parked at the bottom-right and expose one GGLobby toolbar button that locates them sequentially without moving them; exclude lobbies from poker geometry, numbering, hotkeys, ghosts, preservation calculations, and ordinary-window tiles.
+- Keep all ClubGG lobbies permanently parked at the bottom-right and expose one GGLobby toolbar button plus configurable shortcut that locates them sequentially without moving them; exclude lobbies from poker geometry, numbering, per-table shortcuts, ghosts, preservation calculations, and ordinary-window tiles.
+- Offer global shortcuts for Arrange, Show/hide panel, and GGLobby only; do not expose or register focused-table or numbered-table shortcuts.
 - Launch manually and deliver a portable executable only.
 - Keep every delivered release in `dist/`, replacing the stale current executable before publishing while retaining versioned archives by default.
 - Preserve the neutral Table Arranger Control shell identity for compatibility with Asian Hand Converter and similar software.

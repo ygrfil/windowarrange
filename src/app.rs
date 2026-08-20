@@ -24,7 +24,7 @@ use crate::{
     tray::{TrayAction, TrayService, egui_icon},
     win32::{
         Win32Backend, acquire_single_instance, activate_existing_panel, apply_process_mitigations,
-        panel_is_visible, spawn_window_event_watcher, window_icon,
+        move_panel_to_cursor, panel_is_visible, spawn_window_event_watcher, window_icon,
     },
 };
 
@@ -231,6 +231,7 @@ impl TableArrangerApp {
         if panel_is_visible() {
             Self::hide_panel(context);
         } else {
+            let _ = move_panel_to_cursor();
             Self::show_panel(context);
         }
     }
@@ -259,10 +260,9 @@ impl TableArrangerApp {
             };
             match action {
                 HotkeyAction::ArrangeNow => self.send(ControllerCommand::ForceArrange),
-                HotkeyAction::ToggleFocused => self.send(ControllerCommand::ToggleFocused),
                 HotkeyAction::TogglePanel => Self::toggle_panel(context),
-                HotkeyAction::ToggleSlot(slot) => {
-                    self.send(ControllerCommand::ToggleSlot(slot));
+                HotkeyAction::LocateClubGgLobbies => {
+                    self.send(ControllerCommand::LocateClubGgLobbies);
                 }
             }
         }
@@ -1167,16 +1167,12 @@ fn settings_controls(
         .default_open(false)
         .show(ui, |ui| {
             shortcut_field(ui, "Arrange", &mut state.shortcut_draft.arrange_now);
+            shortcut_field(ui, "Show/hide panel", &mut state.shortcut_draft.show_panel);
             shortcut_field(
                 ui,
-                "Toggle focused",
-                &mut state.shortcut_draft.toggle_focused,
+                "GGLobby",
+                &mut state.shortcut_draft.locate_clubgg_lobbies,
             );
-            shortcut_field(ui, "Show/hide panel", &mut state.shortcut_draft.show_panel);
-            ui.separator();
-            for (index, shortcut) in state.shortcut_draft.toggle_slots.iter_mut().enumerate() {
-                shortcut_field(ui, &format!("Table {}", index + 1), shortcut);
-            }
             ui.add_space(3.0);
             if ui
                 .add_sized(

@@ -43,7 +43,7 @@
 
 # Verification
 
-- `cargo test --all-targets`
+- Do not run the suite by default for small dependency-neutral changes outside `tests/`; run `cargo test --all-targets` when tests change, the user requests it, or behavioral risk warrants it.
 - Run the manual checklist in `tests/MANUAL_CLUBGG.md` only with the user present.
 
 # Child DOX Index

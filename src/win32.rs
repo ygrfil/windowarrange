@@ -15,14 +15,15 @@ use windows::{
     Win32::{
         Foundation::{
             CloseHandle, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND,
-            LPARAM, RECT, WPARAM,
+            LPARAM, POINT, RECT, WPARAM,
         },
         Graphics::{
             Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
             Gdi::{
                 BI_RGB, BITMAPINFO, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC,
                 DeleteObject, EnumDisplayMonitors, GetMonitorInfoW, HDC, HGDIOBJ, HMONITOR,
-                MONITORINFO, MONITORINFOEXW, SelectObject,
+                MONITOR_DEFAULTTONEAREST, MONITORINFO, MONITORINFOEXW, MonitorFromPoint,
+                SelectObject,
             },
         },
         System::{
@@ -43,15 +44,15 @@ use windows::{
                 EVENT_OBJECT_HIDE, EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, EnumWindows,
                 FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FindWindowW, FlashWindowEx, GA_ROOT,
                 GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE, GWL_STYLE, GetAncestor, GetClassLongPtrW,
-                GetClassNameW, GetForegroundWindow, GetMessageW, GetWindowLongPtrW, GetWindowRect,
-                GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, HICON, HWND_TOP,
-                ICON_BIG, ICON_SMALL, ICON_SMALL2, IsIconic, IsWindowVisible, MINMAXINFO,
-                MONITORINFOF_PRIMARY, MSG, OBJID_WINDOW, SET_WINDOW_POS_FLAGS, SMTO_ABORTIFHUNG,
-                SW_RESTORE, SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE,
-                SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageTimeoutW,
-                SetForegroundWindow, SetWindowPos, ShowWindowAsync, WINEVENT_OUTOFCONTEXT,
-                WINEVENT_SKIPOWNPROCESS, WM_GETICON, WM_GETMINMAXINFO, WS_CHILD, WS_DISABLED,
-                WS_EX_TOOLWINDOW,
+                GetClassNameW, GetCursorPos, GetForegroundWindow, GetMessageW, GetWindowLongPtrW,
+                GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+                HICON, HWND_TOP, ICON_BIG, ICON_SMALL, ICON_SMALL2, IsIconic, IsWindowVisible,
+                MINMAXINFO, MONITORINFOF_PRIMARY, MSG, OBJID_WINDOW, SET_WINDOW_POS_FLAGS,
+                SMTO_ABORTIFHUNG, SW_RESTORE, SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS,
+                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
+                SWP_SHOWWINDOW, SendMessageTimeoutW, SetForegroundWindow, SetWindowPos,
+                ShowWindowAsync, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_GETICON,
+                WM_GETMINMAXINFO, WS_CHILD, WS_DISABLED, WS_EX_TOOLWINDOW,
             },
         },
     },
@@ -450,6 +451,53 @@ pub fn panel_is_visible() -> bool {
         return false;
     };
     unsafe { IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() }
+}
+
+pub fn move_panel_to_cursor() -> bool {
+    let title = HSTRING::from(PANEL_TITLE);
+    let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) }) else {
+        return false;
+    };
+    let mut cursor = POINT::default();
+    let mut window = RECT::default();
+    let mut monitor = MONITORINFO {
+        cbSize: u32::try_from(size_of::<MONITORINFO>()).unwrap_or(u32::MAX),
+        ..Default::default()
+    };
+
+    // SAFETY: all output pointers reference initialized stack values, and hwnd belongs to the
+    // current process. The panel is moved without resizing, activating, or changing Z-order.
+    unsafe {
+        if GetCursorPos(&raw mut cursor).is_err() || GetWindowRect(hwnd, &raw mut window).is_err() {
+            return false;
+        }
+        let display = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        if !GetMonitorInfoW(display, &raw mut monitor).as_bool() {
+            return false;
+        }
+
+        let width = window.right.saturating_sub(window.left).max(1);
+        let height = window.bottom.saturating_sub(window.top).max(1);
+        let work = monitor.rcWork;
+        let left = cursor
+            .x
+            .saturating_sub(width / 2)
+            .clamp(work.left, work.right.saturating_sub(width).max(work.left));
+        let top = cursor
+            .y
+            .saturating_sub(height / 2)
+            .clamp(work.top, work.bottom.saturating_sub(height).max(work.top));
+        SetWindowPos(
+            hwnd,
+            None,
+            left,
+            top,
+            0,
+            0,
+            SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSIZE | SWP_NOZORDER,
+        )
+        .is_ok()
+    }
 }
 
 pub fn spawn_window_event_watcher(sender: Sender<ControllerCommand>) {

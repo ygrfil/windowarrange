@@ -9,9 +9,8 @@ use crate::config::HotkeySettings;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HotkeyAction {
     ArrangeNow,
-    ToggleFocused,
     TogglePanel,
-    ToggleSlot(usize),
+    LocateClubGgLobbies,
 }
 
 pub struct HotkeyService {
@@ -50,19 +49,14 @@ impl HotkeyService {
         self.registered.clear();
         self.actions.clear();
 
-        let mut requested = vec![
+        let requested = [
             (&settings.arrange_now, HotkeyAction::ArrangeNow),
-            (&settings.toggle_focused, HotkeyAction::ToggleFocused),
             (&settings.show_panel, HotkeyAction::TogglePanel),
+            (
+                &settings.locate_clubgg_lobbies,
+                HotkeyAction::LocateClubGgLobbies,
+            ),
         ];
-        requested.extend(
-            settings
-                .toggle_slots
-                .iter()
-                .take(8)
-                .enumerate()
-                .map(|(slot, shortcut)| (shortcut, HotkeyAction::ToggleSlot(slot))),
-        );
 
         let mut errors = Vec::new();
         for (shortcut, action) in requested {
