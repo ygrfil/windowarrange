@@ -6,15 +6,15 @@ A Windows-only companion that arranges independently movable ClubGG and LDPlayer
 
 1. Start ClubGG and/or Pokerrr 2 in LDPlayer 9, then open the poker tables you want.
 2. Run `Table-Arranger-Control.exe` and approve the Windows administrator prompt.
-3. Press **RnG OFF** beside Auto to show the transparent 1–100 number overlay; the button becomes **RnG ON** and switches it off again. Left-click the number to reroll immediately. Right-click it to change interval, color, size, or corner. Those choices persist across launches, while RnG itself starts Off.
+3. Press **RnG** beside Auto to show the transparent 1–100 number overlay; its selected color communicates that it is On. Press it again to switch it off. Left-click the number to reroll immediately. Right-click it to change interval, color, size, or corner. Those choices persist across launches, while RnG itself starts Off.
 4. Use the mirrored poker board to confirm positions. ClubGG uses two-high 4:3 columns `(1/2)`, `(3/4)`, and `(5/6)`; each LDPlayer window uses its own full-height aspect-preserving column after ClubGG by default.
-5. Left-click anywhere on a poker-table tile, ignored-poker chip, or ordinary-window card to Locate it; only the exact action buttons and poker numbered badge are excluded. The combined lobby card raises its lobbies one by one. Click only a poker tile's numbered badge when selecting tables for swapping. The remaining small vector icons control Active/Park/Ignore on poker tables and Ignore/Fill space/Top-right on ordinary windows.
+5. Left-click anywhere on a poker-table tile, ignored-poker chip, or ordinary-window card to Locate it; only the exact action buttons and poker numbered badge are excluded. **GGLobby** raises detected lobbies one by one. Click only a poker tile's numbered badge when selecting tables for swapping. The remaining small vector icons control Active/Park/Ignore on poker tables and Ignore/Fill space/Top-right on ordinary windows.
 6. Select one poker tile and then another occupied slot to swap them. A ClubGG/LDPlayer swap moves the whole ClubGG pair. Select a table and then a dashed empty placeholder to move it while preserving the old hole.
 7. Leave **Preserve table slots** enabled to retain anonymous baseline space inside a maximum two-column footprint plus explicit holes left by closed tables. LDPlayer consumes an available baseline column instead of being appended after it. Preservation becomes inactive when two or more active columns already occupy the footprint, then returns below two; its preference remains clickable, and a manual Off choice remains off.
-8. Parked tables move to their actual minimum sizes from the display's top-right toward the left. On the miniature real parked table, left-click locates it and right-click unparks it.
+8. Parked tables move to their actual minimum sizes from the display's top-right toward the left. Each parked table gets its own ClubGG or Pokerrr 2 application-icon button beside **GGLobby**; left-click locates it and right-click unparks it, removing the button.
 9. Ordinary windows remain separate and default to Ignore. Choose Top-right to preserve size at the corner or Fill space to force the window into only the full-height strip remaining to the right after poker is laid out.
 
-The mirrored board scales the selected monitor's working area into the compact panel. Active table tiles, muted numbered **Placeholders** targets, and named actual parked miniatures retain their desktop-relative positions. All ClubGG lobby windows are summarized by one count card directly below the mirror and default to Park; its controls affect every lobby together. Clicking **Locate one by one** runs the same ordinary Locate action for each lobby sequentially, raising it exactly where it is parked without resizing, repositioning, or changing its saved Park setting. Lobbies never consume table slots or preserved space. Ignored poker windows remain accessible in the compact unmanaged row.
+The mirrored board scales the selected monitor's working area into the compact panel. Active table tiles and muted numbered **Placeholders** targets retain their desktop-relative positions; parked tables stay out of the mirror and use their toolbar buttons instead. ClubGG lobbies default to Park, and **GGLobby** runs the ordinary Locate action for each lobby sequentially, raising it exactly where it is parked without resizing, repositioning, or changing its saved Park setting. Lobbies never consume table slots or preserved space. Ignored poker windows remain accessible in the compact unmanaged row.
 
 All dispositions, spatial slots, manual holes, monitor choice, hotkeys, and ordinary-window rules are remembered. Identical displayed poker names are treated as separate live windows and retain separate slots. Closing or ignoring a poker window releases its assigned occurrence from the slot immediately; with preservation enabled, the position remains as an anonymous empty target for another table.
 
@@ -27,9 +27,8 @@ Mixed columns use the monitor's full working height when they fit. LDPlayer keep
 Default shortcuts:
 
 - `Ctrl+Shift+A` — arrange now.
-- `Ctrl+Shift+T` — enable or park the focused managed poker table.
 - `Ctrl+Shift+P` — show or hide the panel.
-- `Ctrl+Shift+F1` through `F8` — toggle numbered real poker windows.
+- `Ctrl+Shift+G` — locate detected ClubGG lobbies sequentially.
 
 Release builds request administrator privileges because Windows otherwise blocks movement of the target poker windows. Debug and automated-test artifacts remain non-elevated. Automated tests never move live ClubGG or LDPlayer windows.
 

@@ -299,7 +299,18 @@ impl TableArrangerApp {
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) -> egui::Response {
-        ui.horizontal(|ui| {
+        let parked_tables: Vec<_> = self
+            .snapshot
+            .candidates
+            .iter()
+            .filter(|window| {
+                window.poker_client.is_some()
+                    && !window.is_clubgg_lobby
+                    && window.mode == WindowMode::Parked
+            })
+            .cloned()
+            .collect();
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_sized(
                     [64.0, 24.0],
@@ -391,17 +402,66 @@ impl TableArrangerApp {
             {
                 self.send(ControllerCommand::LocateClubGgLobbies);
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add_sized([26.0, 24.0], egui::Button::new("-"))
-                    .on_hover_text("Hide to tray")
-                    .clicked()
-                {
-                    Self::hide_panel(ui.ctx());
+            for window in &parked_tables {
+                let response = self.parked_table_button(ui, window);
+                if response.clicked_by(egui::PointerButton::Primary) {
+                    self.send(ControllerCommand::Locate(window.id));
+                } else if response.clicked_by(egui::PointerButton::Secondary) {
+                    self.set_window_mode(window, WindowMode::Arranged);
                 }
-            });
+            }
+            if ui
+                .add_sized([26.0, 24.0], egui::Button::new("-"))
+                .on_hover_text("Hide to tray")
+                .clicked()
+            {
+                Self::hide_panel(ui.ctx());
+            }
         })
         .response
+    }
+
+    fn parked_table_button(&mut self, ui: &mut egui::Ui, window: &CandidateView) -> egui::Response {
+        let texture = self.application_icon_texture(ui.ctx(), window.id);
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+        let response = response.on_hover_text(format!(
+            "{}\nLeft click: Locate\nRight click: Unpark",
+            window.label
+        ));
+        let fill = if response.hovered() {
+            PARKED.gamma_multiply(0.55)
+        } else {
+            PARKED.gamma_multiply(0.28)
+        };
+        ui.painter().rect_filled(rect, 5.0, fill);
+        ui.painter().rect_stroke(
+            rect,
+            5.0,
+            egui::Stroke::new(1.0, PARKED),
+            egui::StrokeKind::Inside,
+        );
+        let icon_rect = rect.shrink(3.0);
+        if let Some(texture) = texture {
+            ui.painter().image(
+                texture,
+                icon_rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        } else {
+            let fallback = match window.poker_client {
+                Some(PokerClientKind::LdPlayer) => "P2",
+                _ => "CG",
+            };
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                fallback,
+                egui::FontId::proportional(8.0),
+                ui.visuals().text_color(),
+            );
+        }
+        response
     }
 
     fn workspace(&mut self, ui: &mut egui::Ui) {
@@ -473,47 +533,6 @@ impl TableArrangerApp {
             let rect = project_rect(slot.rect, work_area, board_rect);
             occupied_right = occupied_right.max(rect.right());
             self.mirrored_slot(ui, rect, slot, &windows);
-        }
-
-        for window in windows
-            .iter()
-            .filter(|window| window.mode == WindowMode::Parked)
-        {
-            let rect = project_rect(window.current_rect, work_area, board_rect);
-            let response = ui
-                .interact(
-                    rect.expand(2.0),
-                    ui.make_persistent_id(("parked-window", window.id.0)),
-                    egui::Sense::click(),
-                )
-                .on_hover_text(format!(
-                    "{}\nLeft click: Locate\nRight click: Unpark",
-                    window.label
-                ));
-            ui.painter()
-                .rect_filled(rect, 2.0, PARKED.gamma_multiply(0.22));
-            ui.painter().rect_stroke(
-                rect,
-                2.0,
-                egui::Stroke::new(1.5, PARKED),
-                egui::StrokeKind::Inside,
-            );
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                format!(
-                    "{} {}",
-                    window.slot.unwrap_or_default(),
-                    short_label(&window.label, 7)
-                ),
-                egui::FontId::proportional(7.0),
-                ui.visuals().text_color(),
-            );
-            if response.clicked_by(egui::PointerButton::Primary) {
-                self.send(ControllerCommand::Locate(window.id));
-            } else if response.clicked_by(egui::PointerButton::Secondary) {
-                self.set_window_mode(window, WindowMode::Arranged);
-            }
         }
 
         let application_area = egui::Rect::from_min_max(
@@ -1253,6 +1272,18 @@ fn desired_panel_height(snapshot: &UiSnapshot, panel_width: f32) -> f32 {
         })
         .count();
     let content_width = (panel_width - 12.0).max(1.0);
+    let parked_poker = snapshot
+        .candidates
+        .iter()
+        .filter(|window| {
+            window.poker_client.is_some()
+                && !window.is_clubgg_lobby
+                && window.mode == WindowMode::Parked
+        })
+        .count();
+    let toolbar_width = 434.0 + parked_poker as f32 * 28.0;
+    let toolbar_rows = (toolbar_width / content_width).ceil().max(1.0);
+    let wrapped_toolbar_height = (toolbar_rows - 1.0) * 28.0;
     let mirror_height = snapshot
         .poker_work_area
         .map_or(MINIMUM_BOARD_HEIGHT, |work| {
@@ -1270,7 +1301,8 @@ fn desired_panel_height(snapshot: &UiSnapshot, panel_width: f32) -> f32 {
             + rows.saturating_sub(1) as f32 * CARD_ROW_GAP
     };
 
-    (PANEL_CHROME_HEIGHT + mirror_height + dock_height).clamp(PANEL_MIN_HEIGHT, PANEL_MAX_HEIGHT)
+    (PANEL_CHROME_HEIGHT + wrapped_toolbar_height + mirror_height + dock_height)
+        .clamp(PANEL_MIN_HEIGHT, PANEL_MAX_HEIGHT)
 }
 
 fn window_dock_columns(content_width: f32) -> usize {
