@@ -21,7 +21,7 @@ use crate::{
     tray::{TrayAction, TrayService, egui_icon},
     win32::{
         Win32Backend, acquire_single_instance, activate_existing_panel, apply_process_mitigations,
-        spawn_window_event_watcher,
+        panel_is_visible, spawn_window_event_watcher,
     },
 };
 
@@ -219,6 +219,14 @@ impl TableArrangerApp {
         context.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     }
 
+    fn toggle_panel(context: &egui::Context) {
+        if panel_is_visible() {
+            Self::hide_panel(context);
+        } else {
+            Self::show_panel(context);
+        }
+    }
+
     fn handle_background_events(&mut self, context: &egui::Context) {
         for snapshot in self.snapshots.try_iter() {
             self.snapshot = Arc::clone(&snapshot);
@@ -238,7 +246,7 @@ impl TableArrangerApp {
             match action {
                 HotkeyAction::ArrangeNow => self.send(ControllerCommand::ForceArrange),
                 HotkeyAction::ToggleFocused => self.send(ControllerCommand::ToggleFocused),
-                HotkeyAction::ShowPanel => Self::show_panel(context),
+                HotkeyAction::TogglePanel => Self::toggle_panel(context),
                 HotkeyAction::ToggleSlot(slot) => {
                     self.send(ControllerCommand::ToggleSlot(slot));
                 }
@@ -1210,7 +1218,7 @@ fn settings_controls(
                 "Toggle focused",
                 &mut state.shortcut_draft.toggle_focused,
             );
-            shortcut_field(ui, "Show panel", &mut state.shortcut_draft.show_panel);
+            shortcut_field(ui, "Show/hide panel", &mut state.shortcut_draft.show_panel);
             ui.separator();
             for (index, shortcut) in state.shortcut_draft.toggle_slots.iter_mut().enumerate() {
                 shortcut_field(ui, &format!("Table {}", index + 1), shortcut);

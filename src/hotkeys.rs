@@ -10,7 +10,7 @@ use crate::config::HotkeySettings;
 pub enum HotkeyAction {
     ArrangeNow,
     ToggleFocused,
-    ShowPanel,
+    TogglePanel,
     ToggleSlot(usize),
 }
 
@@ -53,7 +53,7 @@ impl HotkeyService {
         let mut requested = vec![
             (&settings.arrange_now, HotkeyAction::ArrangeNow),
             (&settings.toggle_focused, HotkeyAction::ToggleFocused),
-            (&settings.show_panel, HotkeyAction::ShowPanel),
+            (&settings.show_panel, HotkeyAction::TogglePanel),
         ];
         requested.extend(
             settings

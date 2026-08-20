@@ -310,6 +310,15 @@ pub fn activate_existing_panel() {
     }
 }
 
+#[must_use]
+pub fn panel_is_visible() -> bool {
+    let title = HSTRING::from(PANEL_TITLE);
+    let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) }) else {
+        return false;
+    };
+    unsafe { IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() }
+}
+
 pub fn spawn_window_event_watcher(sender: Sender<ControllerCommand>) {
     let _ = WINDOW_EVENT_SENDER.set(sender);
     thread::Builder::new()
