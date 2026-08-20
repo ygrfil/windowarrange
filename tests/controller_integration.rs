@@ -1067,6 +1067,50 @@ fn every_candidate_exposes_arrange_park_and_ignore_state() {
 }
 
 #[test]
+fn newly_opened_poker_table_ignores_a_stale_exact_park_rule() {
+    let backend = MockBackend::with_tables(2);
+    let store = ConfigStore::at(temp_config_path("new-table-ignores-stale-park"));
+    let mut config = AppConfig {
+        auto_arrange: false,
+        ..AppConfig::default()
+    };
+    config.set_disposition(
+        candidate(3).signature,
+        clubgg_table_arranger::model::CandidateDisposition::Parked,
+    );
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store);
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 2);
+
+    handle
+        .commands
+        .send(ControllerCommand::SetWindowMode {
+            id: WindowId(2),
+            mode: WindowMode::Parked,
+        })
+        .unwrap();
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        candidate_mode(snapshot, 2) == WindowMode::Parked
+    });
+
+    backend.candidates.lock().unwrap().push(candidate(3));
+    handle
+        .commands
+        .send(ControllerCommand::ForceArrange)
+        .unwrap();
+    let opened = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 3);
+    assert_eq!(candidate_mode(&opened, 2), WindowMode::Parked);
+    assert_eq!(candidate_mode(&opened, 3), WindowMode::Arranged);
+    assert!(
+        opened
+            .tables
+            .iter()
+            .any(|table| table.id == WindowId(3) && table.enabled)
+    );
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
 fn saved_parked_clubgg_lobby_remains_visible_and_managed() {
     let backend = MockBackend::with_tables(0);
     let mut lobby = candidate(8);

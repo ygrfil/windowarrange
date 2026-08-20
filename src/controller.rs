@@ -123,6 +123,7 @@ struct Controller {
     last_reconcile: Instant,
     discovery_due: Option<Instant>,
     status_message: String,
+    initial_discovery_complete: bool,
 }
 
 impl Controller {
@@ -150,6 +151,7 @@ impl Controller {
             last_reconcile: Instant::now() - FALLBACK_RECONCILE_INTERVAL,
             discovery_due: None,
             status_message: "Looking for poker tables…".to_owned(),
+            initial_discovery_complete: false,
         }
     }
 
@@ -526,6 +528,9 @@ impl Controller {
                 .position(|table| table.id == candidate.id);
 
             if should_manage && existing.is_none() {
+                let newly_opened_poker = self.initial_discovery_complete
+                    && candidate.poker_client.is_some()
+                    && !old_candidate_ids.contains(&candidate.id);
                 let parked_rule_already_claimed = disposition == Some(CandidateDisposition::Parked)
                     && self.tables.iter().any(|table| {
                         !table.enabled
@@ -533,7 +538,8 @@ impl Controller {
                                 == candidate.poker_client.unwrap_or(PokerClientKind::ClubGg)
                             && table.signature == candidate.signature
                     });
-                let enabled = disposition != Some(CandidateDisposition::Parked)
+                let enabled = newly_opened_poker
+                    || disposition != Some(CandidateDisposition::Parked)
                     || parked_rule_already_claimed;
                 if !self.config.table_order.contains(&candidate.signature) {
                     self.config.table_order.push(candidate.signature.clone());
@@ -654,6 +660,7 @@ impl Controller {
             other_window_count,
             if other_window_count == 1 { "" } else { "s" }
         );
+        self.initial_discovery_complete = true;
         self.publish();
     }
 
