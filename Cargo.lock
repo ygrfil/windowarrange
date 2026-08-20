@@ -568,7 +568,7 @@ dependencies = [
 
 [[package]]
 name = "clubgg-table-arranger"
-version = "0.5.28"
+version = "0.5.29"
 dependencies = [
  "crossbeam-channel",
  "eframe",
