@@ -1,7 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
     ffi::c_void,
+    io,
     mem::size_of,
+    os::windows::ffi::OsStrExt,
+    path::Path,
     sync::{
         Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -26,6 +29,7 @@ use windows::{
                 SelectObject,
             },
         },
+        Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
         System::{
             Diagnostics::ToolHelp::{
                 CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
@@ -77,6 +81,24 @@ const APPLICATION_ICON_SIZE: usize = 64;
 pub struct WindowIcon {
     pub size: usize,
     pub rgba: Vec<u8>,
+}
+
+pub fn atomic_replace_file(source: &Path, destination: &Path) -> io::Result<()> {
+    let source: Vec<_> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<_> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: both paths are stable, null-terminated UTF-16 buffers for the duration of the call.
+    unsafe {
+        MoveFileExW(
+            PCWSTR(source.as_ptr()),
+            PCWSTR(destination.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(io::Error::other)
 }
 
 /// Loads a window's application icon into owned RGBA pixels without transferring icon ownership.

@@ -1,12 +1,17 @@
 use std::{
     env, fs,
+    fs::OpenOptions,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::model::{CandidateDisposition, PokerColumnAssignment, PokerSlotId, WindowSignature};
+use crate::{
+    model::{CandidateDisposition, PokerColumnAssignment, PokerSlotId, WindowSignature},
+    win32::atomic_replace_file,
+};
 
 const CONFIG_VERSION: u32 = 8;
 
@@ -233,13 +238,35 @@ impl ConfigStore {
     }
 
     pub fn save(&self, config: &AppConfig) -> Result<(), ConfigError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
         let serialized = serde_json::to_string_pretty(config)?;
-        fs::write(&self.path, serialized)?;
+        write_atomic(&self.path, serialized.as_bytes())?;
         Ok(())
     }
+}
+
+pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut temporary_name = path.file_name().unwrap_or_default().to_os_string();
+    temporary_name.push(".tmp");
+    let temporary_path = path.with_file_name(temporary_name);
+
+    let write_result = (|| {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary_path)?;
+        file.write_all(contents)?;
+        file.sync_all()?;
+        drop(file);
+        atomic_replace_file(&temporary_path, path)
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    write_result
 }
 
 #[derive(Debug, Error)]
@@ -253,6 +280,66 @@ pub enum ConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temporary_config_path(label: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "table-arranger-{label}-{}-{unique}.json",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn atomic_save_replaces_and_round_trips_every_main_setting() {
+        let path = temporary_config_path("all-settings");
+        let store = ConfigStore::at(path.clone());
+        let table = WindowSignature {
+            process_name: "clubgg.exe".to_owned(),
+            class_name: "ClubTable".to_owned(),
+            title_pattern: "table #".to_owned(),
+        };
+        let application = WindowSignature {
+            process_name: "browser.exe".to_owned(),
+            class_name: "BrowserWindow".to_owned(),
+            title_pattern: "workspace".to_owned(),
+        };
+        let mut config = AppConfig {
+            selected_monitor: Some("display-2".to_owned()),
+            auto_arrange: false,
+            preserve_table_slots: false,
+            default_application_mode: ApplicationDefault::TopRight,
+            table_order: vec![table.clone()],
+            poker_columns: vec![PokerColumnAssignment::ClubGg {
+                top: Some(table.clone()),
+                bottom: None,
+            }],
+            poker_placeholders: vec![PokerSlotId::club(0, 1)],
+            hotkeys: HotkeySettings {
+                arrange_now: "Ctrl+Alt+A".to_owned(),
+                show_panel: "Ctrl+Alt+P".to_owned(),
+                locate_clubgg_lobbies: "Ctrl+Alt+G".to_owned(),
+            },
+            ..AppConfig::default()
+        };
+        config.set_disposition(table, CandidateDisposition::Parked);
+        config.set_application_disposition(application, CandidateDisposition::FreeSpace);
+
+        store.save(&AppConfig::default()).unwrap();
+        store.save(&config).unwrap();
+        let loaded = store.load().unwrap();
+
+        assert_eq!(
+            serde_json::to_value(loaded).unwrap(),
+            serde_json::to_value(config).unwrap()
+        );
+        let mut temporary_name = path.file_name().unwrap().to_os_string();
+        temporary_name.push(".tmp");
+        assert!(!path.with_file_name(temporary_name).exists());
+        fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn detection_rule_last_write_wins() {

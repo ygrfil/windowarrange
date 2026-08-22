@@ -823,14 +823,6 @@ impl TableArrangerApp {
 
         let badge_rect =
             egui::Rect::from_min_size(rect.min + egui::vec2(3.0, 3.0), egui::vec2(16.0, 16.0));
-        let badge_hit_rect = badge_rect.expand(3.0).intersect(rect);
-        let badge_response = ui
-            .interact(
-                badge_hit_rect,
-                ui.make_persistent_id(("table-number", window.id.0)),
-                egui::Sense::click(),
-            )
-            .on_hover_text("Select this table number for swapping");
         ui.painter()
             .rect_filled(badge_rect, 3.0, if slot.parked { PARKED } else { ACCENT });
         ui.painter().text(
@@ -856,7 +848,7 @@ impl TableArrangerApp {
         let gap = 1.0;
         let total = icon_size * 3.0 + gap * 2.0;
         let action_top = rect.bottom() - icon_size - 2.0;
-        let mut control_rects = vec![badge_hit_rect];
+        let mut control_rects = Vec::with_capacity(3);
         if rect.width() >= total + 4.0 && rect.height() >= icon_size * 2.0 + 5.0 {
             let start = egui::pos2(rect.center().x - total / 2.0, action_top);
             for (index, (icon, mode, color, tooltip)) in [
@@ -894,7 +886,7 @@ impl TableArrangerApp {
             }
         }
 
-        let body_clicked = clickable_body_rects(rect, &control_rects)
+        let tile_clicked = clickable_body_rects(rect, &control_rects)
             .into_iter()
             .enumerate()
             .filter(|(_, body_rect)| body_rect.is_positive())
@@ -905,19 +897,16 @@ impl TableArrangerApp {
                     egui::Sense::click(),
                 )
                 .on_hover_text(format!(
-                    "{}\nLeft click: Locate\nClick the number badge to select for swapping",
+                    "{}\nClick to select this table for moving or swapping",
                     window_subtitle(window)
                 ))
                 .clicked()
             });
-        if badge_response.clicked() {
-            if let Some(command) =
+        if tile_clicked
+            && let Some(command) =
                 slot_click_command(&mut self.selected_table, Some(window.id), slot.id)
-            {
-                self.send(command);
-            }
-        } else if body_clicked {
-            self.send(ControllerCommand::Locate(window.id));
+        {
+            self.send(command);
         }
     }
 
@@ -1218,7 +1207,7 @@ fn settings_controls(
             let _ = icon_button(ui, rect, icon, false, ACCENT, label);
             ui.label(egui::RichText::new(label).small());
         }
-        ui.label(egui::RichText::new("Left click card = Locate").small());
+        ui.label(egui::RichText::new("Poker card = Move/swap · Other card = Locate").small());
     });
 
     ui.label("Default for new non-poker windows");
@@ -1841,7 +1830,7 @@ mod tests {
     }
 
     #[test]
-    fn table_body_hit_regions_do_not_cover_number_or_action_controls() {
+    fn table_hit_regions_include_number_and_exclude_action_controls() {
         let tile = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(120.0, 80.0));
         let badge = egui::Rect::from_min_size(egui::pos2(3.0, 3.0), egui::vec2(16.0, 16.0));
         let actions = [
@@ -1849,17 +1838,17 @@ mod tests {
             egui::Rect::from_min_size(egui::pos2(52.0, 62.0), egui::vec2(16.0, 16.0)),
             egui::Rect::from_min_size(egui::pos2(70.0, 62.0), egui::vec2(16.0, 16.0)),
         ];
-        let controls = [badge, actions[0], actions[1], actions[2]];
-        let regions = clickable_body_rects(tile, &controls);
+        let regions = clickable_body_rects(tile, &actions);
 
         for point in [
             egui::pos2(60.0, 30.0),
             egui::pos2(1.0, 79.0),
             egui::pos2(60.0, 79.0),
+            badge.center(),
         ] {
             assert!(regions.iter().any(|region| region.contains(point)));
         }
-        for control in controls {
+        for control in actions {
             assert!(
                 !regions
                     .iter()
@@ -1867,7 +1856,7 @@ mod tests {
             );
         }
         let clickable_area: f32 = regions.iter().map(egui::Rect::area).sum();
-        let control_area: f32 = controls.iter().map(egui::Rect::area).sum();
+        let control_area: f32 = actions.iter().map(egui::Rect::area).sum();
         assert!((clickable_area + control_area - tile.area()).abs() < 0.01);
     }
 

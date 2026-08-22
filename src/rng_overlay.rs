@@ -32,7 +32,7 @@ use windows::{
     core::{PCWSTR, w},
 };
 
-use crate::model::Rect as WorkRect;
+use crate::{config::write_atomic, model::Rect as WorkRect};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // This module is the native boundary for the RnG overlay. Raw handles remain on
@@ -190,12 +190,6 @@ fn settings_path() -> PathBuf {
 
 fn save_settings() {
     let path = settings_path();
-    if let Some(parent) = path.parent()
-        && let Err(error) = fs::create_dir_all(parent)
-    {
-        log::warn!("could not create RnG settings directory: {error}");
-        return;
-    }
     let contents = format!(
         "interval={}\ncolor={}\nsize={}\ncorner={}\n",
         INTERVAL_SECONDS.load(Ordering::Relaxed),
@@ -203,7 +197,7 @@ fn save_settings() {
         FONT_SIZE.load(Ordering::Relaxed),
         CORNER.load(Ordering::Relaxed),
     );
-    if let Err(error) = fs::write(path, contents) {
+    if let Err(error) = write_atomic(&path, contents.as_bytes()) {
         log::warn!("could not save RnG settings: {error}");
     }
 }
