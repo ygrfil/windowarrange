@@ -400,7 +400,7 @@ impl TableArrangerApp {
                     egui::Button::new("Space").selected(preserve_requested),
                 )
                 .on_hover_text(if self.snapshot.preserve_table_slots_auto_suppressed {
-                    "Preserve table slots is On but currently inactive because two or more active poker columns already occupy the footprint"
+                    "Preserve table slots is On but currently inactive because more than four poker tables are active"
                 } else if preserve_requested {
                     "Preserve table slots is On"
                 } else {

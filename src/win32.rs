@@ -193,9 +193,11 @@ fn render_window_icon(icon: HICON) -> Option<WindowIcon> {
                 APPLICATION_ICON_SIZE * APPLICATION_ICON_SIZE * 4,
             )
         };
-        let has_alpha = bgra.chunks_exact(4).any(|pixel| pixel[3] != 0);
+        let (pixels, remainder) = bgra.as_chunks::<4>();
+        debug_assert!(remainder.is_empty());
+        let has_alpha = pixels.iter().any(|pixel| pixel[3] != 0);
         let mut rgba = Vec::with_capacity(bgra.len());
-        for pixel in bgra.chunks_exact(4) {
+        for pixel in pixels {
             let alpha = if has_alpha {
                 pixel[3]
             } else if pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0 {

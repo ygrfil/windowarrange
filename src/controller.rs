@@ -892,26 +892,15 @@ impl Controller {
         if self.effective_preserve_table_slots() {
             self.config.poker_columns.clone()
         } else if self.config.preserve_table_slots {
-            active_assigned_columns(
-                &self.config.poker_columns,
-                &self.tables,
-                &self.config.poker_placeholders,
-            )
+            active_assigned_columns(&self.config.poker_columns, &self.tables, &[])
         } else {
             compact_columns(self.tables.iter().filter(|table| table.enabled))
         }
     }
 
     fn effective_preserve_table_slots(&self) -> bool {
-        self.config.preserve_table_slots && self.occupied_active_column_count() < 2
-    }
-
-    fn occupied_active_column_count(&self) -> usize {
-        resolved_slot_table_indices(&self.config.poker_columns, &self.tables)
-            .into_iter()
-            .filter_map(|(slot, index)| self.tables[index].enabled.then_some(slot.column))
-            .collect::<HashSet<_>>()
-            .len()
+        self.config.preserve_table_slots
+            && self.tables.iter().filter(|table| table.enabled).count() <= 4
     }
 
     fn mixed_layout_for(

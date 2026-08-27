@@ -277,9 +277,9 @@ fn ldplayer_uses_a_full_height_column_and_cross_swap_moves_the_club_pair() {
     let initial = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 3);
 
     assert_eq!(ids(&initial), vec![1, 2, 9]);
-    assert!(!initial.preserve_table_slots);
+    assert!(initial.preserve_table_slots);
     assert!(initial.preserve_table_slots_requested);
-    assert!(initial.preserve_table_slots_auto_suppressed);
+    assert!(!initial.preserve_table_slots_auto_suppressed);
     assert_eq!(initial.poker_slots.len(), 3);
     let ld_slot = initial
         .poker_slots
@@ -616,17 +616,12 @@ fn moving_table_one_into_placeholder_two_moves_the_window_and_leaves_a_hole() {
 }
 
 #[test]
-fn preserve_slots_auto_suppresses_for_two_busy_columns_and_restores_after_park() {
-    let backend = MockBackend::with_tables(1);
-    backend
-        .candidates
-        .lock()
-        .unwrap()
-        .push(ldplayer_candidate(9));
+fn preserve_slots_auto_suppresses_above_four_tables_and_restores_after_park() {
+    let backend = MockBackend::with_tables(5);
     let store = ConfigStore::at(temp_config_path("automatic-slot-preservation"));
     let handle = spawn_controller(Arc::new(backend), AppConfig::default(), store.clone());
     let suppressed = wait_for_snapshot(&handle.snapshots, |snapshot| {
-        snapshot.tables.len() == 2 && snapshot.preserve_table_slots_auto_suppressed
+        snapshot.tables.len() == 5 && snapshot.preserve_table_slots_auto_suppressed
     });
     assert!(!suppressed.preserve_table_slots);
     assert!(suppressed.preserve_table_slots_requested);
@@ -645,7 +640,7 @@ fn preserve_slots_auto_suppresses_for_two_busy_columns_and_restores_after_park()
     handle
         .commands
         .send(ControllerCommand::SetWindowMode {
-            id: WindowId(9),
+            id: WindowId(5),
             mode: WindowMode::Parked,
         })
         .unwrap();
@@ -655,7 +650,7 @@ fn preserve_slots_auto_suppresses_for_two_busy_columns_and_restores_after_park()
             && snapshot
                 .tables
                 .iter()
-                .any(|table| table.id == WindowId(9) && !table.enabled)
+                .any(|table| table.id == WindowId(5) && !table.enabled)
     });
     assert!(!still_disabled.preserve_table_slots_auto_suppressed);
 
@@ -667,6 +662,44 @@ fn preserve_slots_auto_suppresses_for_two_busy_columns_and_restores_after_park()
         snapshot.preserve_table_slots && snapshot.preserve_table_slots_requested
     });
     assert!(!restored.preserve_table_slots_auto_suppressed);
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
+fn more_than_four_active_tables_omit_placeholder_only_columns() {
+    let backend = MockBackend::with_tables(7);
+    let store = ConfigStore::at(temp_config_path("omit-space-above-four"));
+    let handle = spawn_controller(Arc::new(backend), AppConfig::default(), store.clone());
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 7);
+
+    handle
+        .commands
+        .send(ControllerCommand::SetWindowMode {
+            id: WindowId(7),
+            mode: WindowMode::Parked,
+        })
+        .unwrap();
+    let six_active = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot.preserve_table_slots_auto_suppressed
+            && snapshot.tables.iter().filter(|table| table.enabled).count() == 6
+            && snapshot.poker_slots.len() == 6
+    });
+    assert_eq!(
+        six_active
+            .poker_slots
+            .iter()
+            .map(|slot| slot.id.column)
+            .max(),
+        Some(2)
+    );
+    assert!(
+        store
+            .load()
+            .unwrap()
+            .poker_placeholders
+            .contains(&PokerSlotId::club(3, 0))
+    );
 
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
@@ -838,9 +871,9 @@ fn disabling_slot_preservation_compacts_manual_holes_immediately() {
                 slot.id == PokerSlotId::club(1, 0) && slot.occupant == Some(WindowId(1))
             })
     });
-    assert!(!with_hole.preserve_table_slots);
+    assert!(with_hole.preserve_table_slots);
     assert!(with_hole.preserve_table_slots_requested);
-    assert!(with_hole.preserve_table_slots_auto_suppressed);
+    assert!(!with_hole.preserve_table_slots_auto_suppressed);
 
     handle
         .commands
