@@ -301,7 +301,7 @@ impl Controller {
         {
             if mode == WindowMode::Parked {
                 self.window_statuses.remove(&id);
-                self.release_slot_for(id);
+                self.release_slot_for(id, false);
             }
             if let Some(index) = self.tables.iter().position(|table| table.id == id) {
                 self.tables[index].enabled = mode == WindowMode::Arranged;
@@ -319,7 +319,7 @@ impl Controller {
         }
         if matches!(mode, WindowMode::Parked | WindowMode::Ignored) {
             self.window_statuses.remove(&id);
-            self.release_slot_for(id);
+            self.release_slot_for(id, mode != WindowMode::Parked);
             if let Some(index) = self.tables.iter().position(|table| table.id == id) {
                 self.tables[index].enabled = false;
             }
@@ -447,22 +447,21 @@ impl Controller {
             candidates.iter().map(|item| (item.id, item)).collect();
 
         let old_resolved = resolved_slot_table_indices(&self.config.poker_columns, &self.tables);
-        let closed_slots: Vec<_> = old_resolved
+        let mut closed_slots: Vec<_> = old_resolved
             .into_iter()
             .filter_map(|(slot, index)| {
                 (!candidate_by_id.contains_key(&self.tables[index].id)).then_some(slot)
             })
             .collect();
         let closed_slots_changed = !closed_slots.is_empty();
-        for slot in closed_slots {
-            vacate_slot(
+        closed_slots.sort_by_key(|slot| (slot.column, slot.row.unwrap_or(0)));
+        for slot in closed_slots.into_iter().rev() {
+            self.config.poker_placeholders.retain(|item| *item != slot);
+            release_parked_slot(
                 &mut self.config.poker_columns,
+                &mut self.config.poker_placeholders,
                 slot,
-                self.config.preserve_table_slots,
             );
-            if self.config.preserve_table_slots && !self.config.poker_placeholders.contains(&slot) {
-                self.config.poker_placeholders.push(slot);
-            }
         }
 
         self.tables
@@ -775,7 +774,7 @@ impl Controller {
             .collect();
     }
 
-    fn release_slot_for(&mut self, id: WindowId) {
+    fn release_slot_for(&mut self, id: WindowId, preserve_placeholder: bool) {
         let resolved = resolved_slot_table_indices(&self.config.poker_columns, &self.tables);
         let Some(slot) = resolved
             .into_iter()
@@ -783,17 +782,18 @@ impl Controller {
         else {
             return;
         };
-        vacate_slot(
-            &mut self.config.poker_columns,
-            slot,
-            self.config.preserve_table_slots,
-        );
-        if self.config.preserve_table_slots {
+        if self.config.preserve_table_slots && preserve_placeholder {
+            vacate_slot(&mut self.config.poker_columns, slot, true);
             if !self.config.poker_placeholders.contains(&slot) {
                 self.config.poker_placeholders.push(slot);
             }
         } else {
             self.config.poker_placeholders.retain(|item| *item != slot);
+            release_parked_slot(
+                &mut self.config.poker_columns,
+                &mut self.config.poker_placeholders,
+                slot,
+            );
         }
     }
 
@@ -892,7 +892,7 @@ impl Controller {
         if self.effective_preserve_table_slots() {
             self.config.poker_columns.clone()
         } else if self.config.preserve_table_slots {
-            active_assigned_columns(&self.config.poker_columns, &self.tables, &[])
+            active_columns_without_reordering(&self.config.poker_columns, &self.tables)
         } else {
             compact_columns(self.tables.iter().filter(|table| table.enabled))
         }
@@ -1498,86 +1498,66 @@ impl Controller {
     }
 }
 
+fn active_columns_without_reordering(
+    columns: &[PokerColumnAssignment],
+    tables: &[ManagedTable],
+) -> Vec<PokerColumnAssignment> {
+    let resolved = resolved_slot_table_indices(columns, tables);
+    let Some(last_active_column) = resolved.keys().map(|slot| slot.column).max() else {
+        return Vec::new();
+    };
+
+    columns[..=last_active_column]
+        .iter()
+        .enumerate()
+        .map(|(column, assignment)| match assignment {
+            PokerColumnAssignment::ClubGg { top, bottom } => PokerColumnAssignment::ClubGg {
+                top: resolved
+                    .contains_key(&PokerSlotId::club(column, 0))
+                    .then(|| top.clone())
+                    .flatten(),
+                bottom: resolved
+                    .contains_key(&PokerSlotId::club(column, 1))
+                    .then(|| bottom.clone())
+                    .flatten(),
+            },
+            PokerColumnAssignment::LdPlayer { table } => PokerColumnAssignment::LdPlayer {
+                table: resolved
+                    .contains_key(&PokerSlotId::full_height(column))
+                    .then(|| table.clone())
+                    .flatten(),
+            },
+            PokerColumnAssignment::Empty => PokerColumnAssignment::Empty,
+        })
+        .collect()
+}
+
 fn compact_columns<'a>(
     tables: impl Iterator<Item = &'a ManagedTable>,
 ) -> Vec<PokerColumnAssignment> {
-    let mut clubgg = Vec::new();
-    let mut ldplayer = Vec::new();
+    let mut columns = Vec::new();
     for table in tables {
         match table.poker_client {
-            PokerClientKind::ClubGg => clubgg.push(table.signature.clone()),
-            PokerClientKind::LdPlayer => ldplayer.push(table.signature.clone()),
+            PokerClientKind::ClubGg => {
+                if let Some(PokerColumnAssignment::ClubGg { bottom, .. }) = columns.last_mut()
+                    && bottom.is_none()
+                {
+                    *bottom = Some(table.signature.clone());
+                } else {
+                    columns.push(PokerColumnAssignment::ClubGg {
+                        top: Some(table.signature.clone()),
+                        bottom: None,
+                    });
+                }
+            }
+            PokerClientKind::LdPlayer => {
+                columns.push(PokerColumnAssignment::LdPlayer {
+                    table: Some(table.signature.clone()),
+                });
+            }
         }
     }
-
-    let mut columns = Vec::new();
-    for pair in clubgg.chunks(2) {
-        columns.push(PokerColumnAssignment::ClubGg {
-            top: pair.first().cloned(),
-            bottom: pair.get(1).cloned(),
-        });
-    }
-    columns.extend(
-        ldplayer
-            .into_iter()
-            .map(|table| PokerColumnAssignment::LdPlayer { table: Some(table) }),
-    );
     columns
-}
-
-fn active_assigned_columns(
-    columns: &[PokerColumnAssignment],
-    tables: &[ManagedTable],
-    placeholders: &[PokerSlotId],
-) -> Vec<PokerColumnAssignment> {
-    let resolved = resolved_slot_table_indices(columns, tables);
-    columns
-        .iter()
-        .enumerate()
-        .filter_map(|(column_index, column)| match column {
-            PokerColumnAssignment::ClubGg { top, bottom } => {
-                let top = top
-                    .as_ref()
-                    .filter(|_| {
-                        resolved
-                            .get(&PokerSlotId::club(column_index, 0))
-                            .is_some_and(|index| tables[*index].enabled)
-                    })
-                    .cloned();
-                let bottom = bottom
-                    .as_ref()
-                    .filter(|_| {
-                        resolved
-                            .get(&PokerSlotId::club(column_index, 1))
-                            .is_some_and(|index| tables[*index].enabled)
-                    })
-                    .cloned();
-                (top.is_some()
-                    || bottom.is_some()
-                    || placeholders.iter().any(|slot| slot.column == column_index))
-                .then_some(PokerColumnAssignment::ClubGg { top, bottom })
-            }
-            PokerColumnAssignment::LdPlayer { table } => table
-                .as_ref()
-                .filter(|_| {
-                    resolved
-                        .get(&PokerSlotId::full_height(column_index))
-                        .is_some_and(|index| tables[*index].enabled)
-                })
-                .cloned()
-                .map(|table| PokerColumnAssignment::LdPlayer { table: Some(table) })
-                .or_else(|| {
-                    placeholders
-                        .iter()
-                        .any(|slot| slot.column == column_index)
-                        .then_some(PokerColumnAssignment::LdPlayer { table: None })
-                }),
-            PokerColumnAssignment::Empty => placeholders
-                .iter()
-                .any(|slot| slot.column == column_index)
-                .then_some(PokerColumnAssignment::Empty),
-        })
-        .collect()
 }
 
 fn column_signatures(column: &PokerColumnAssignment) -> impl Iterator<Item = &WindowSignature> {
@@ -1650,11 +1630,7 @@ fn assign_new_signature(
 ) {
     match client {
         PokerClientKind::ClubGg => {
-            let club_section_end = columns
-                .iter()
-                .position(|column| matches!(column, PokerColumnAssignment::LdPlayer { .. }))
-                .unwrap_or(columns.len());
-            for column in &mut columns[..club_section_end] {
+            for column in columns.iter_mut() {
                 match column {
                     PokerColumnAssignment::ClubGg { top, bottom } => {
                         if top.is_none() {
@@ -1676,15 +1652,19 @@ fn assign_new_signature(
                     PokerColumnAssignment::LdPlayer { .. } => {}
                 }
             }
-            columns.insert(
-                club_section_end,
-                PokerColumnAssignment::ClubGg {
-                    top: Some(signature),
-                    bottom: None,
-                },
-            );
+            columns.push(PokerColumnAssignment::ClubGg {
+                top: Some(signature),
+                bottom: None,
+            });
         }
         PokerClientKind::LdPlayer => {
+            if let Some(PokerColumnAssignment::LdPlayer { table }) = columns
+                .iter_mut()
+                .find(|column| matches!(column, PokerColumnAssignment::LdPlayer { table: None }))
+            {
+                *table = Some(signature);
+                return;
+            }
             let after_last_club = columns
                 .iter()
                 .rposition(|column| {
@@ -1802,6 +1782,74 @@ fn clear_slot(columns: &mut [PokerColumnAssignment], slot: PokerSlotId) {
         Some(PokerColumnAssignment::LdPlayer { table: None })
     ) {
         columns[slot.column] = PokerColumnAssignment::Empty;
+    }
+}
+
+fn release_parked_slot(
+    columns: &mut Vec<PokerColumnAssignment>,
+    placeholders: &mut [PokerSlotId],
+    slot: PokerSlotId,
+) {
+    let compatible_slots = if slot.row.is_some() {
+        let mut start = slot.column;
+        while start > 0 && matches!(&columns[start - 1], PokerColumnAssignment::ClubGg { .. }) {
+            start -= 1;
+        }
+        let mut end = slot.column;
+        while end + 1 < columns.len()
+            && matches!(&columns[end + 1], PokerColumnAssignment::ClubGg { .. })
+        {
+            end += 1;
+        }
+        (start..=end)
+            .flat_map(|column| [PokerSlotId::club(column, 0), PokerSlotId::club(column, 1)])
+            .collect::<Vec<_>>()
+    } else {
+        let mut start = slot.column;
+        while start > 0 && matches!(&columns[start - 1], PokerColumnAssignment::LdPlayer { .. }) {
+            start -= 1;
+        }
+        let mut end = slot.column;
+        while end + 1 < columns.len()
+            && matches!(&columns[end + 1], PokerColumnAssignment::LdPlayer { .. })
+        {
+            end += 1;
+        }
+        (start..=end)
+            .map(PokerSlotId::full_height)
+            .collect::<Vec<_>>()
+    };
+
+    set_slot_signature(columns, slot, None);
+    let Some(mut hole_index) = compatible_slots.iter().position(|item| *item == slot) else {
+        return;
+    };
+    for next_index in hole_index + 1..compatible_slots.len() {
+        let next = compatible_slots[next_index];
+        if placeholders.contains(&next) {
+            break;
+        }
+        let Some(signature) = signature_at_slot(columns, next).cloned() else {
+            continue;
+        };
+        set_slot_signature(columns, compatible_slots[hole_index], Some(signature));
+        set_slot_signature(columns, next, None);
+        hole_index = next_index;
+    }
+
+    for column in (0..columns.len()).rev() {
+        if !column_is_owned(&columns[column])
+            && !placeholders
+                .iter()
+                .any(|placeholder| placeholder.column == column)
+        {
+            columns.remove(column);
+            for placeholder in placeholders.iter_mut() {
+                if placeholder.column > column {
+                    placeholder.column -= 1;
+                }
+            }
+        }
     }
 }
 

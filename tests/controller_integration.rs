@@ -85,7 +85,11 @@ impl WindowBackend for MockBackend {
 fn locate_command_reaches_the_selected_window() {
     let backend = MockBackend::with_tables(1);
     let store = ConfigStore::at(temp_config_path("locate-window"));
-    let handle = spawn_controller(Arc::new(backend.clone()), AppConfig::default(), store);
+    let handle = spawn_controller(
+        Arc::new(backend.clone()),
+        AppConfig::default(),
+        store.clone(),
+    );
     let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 1);
 
     handle
@@ -114,7 +118,7 @@ fn identical_table_signatures_resolve_to_distinct_windows_and_slots() {
         auto_arrange: false,
         ..AppConfig::default()
     };
-    let handle = spawn_controller(Arc::new(backend.clone()), config, store);
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store.clone());
     let initial = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 3);
     let occupants: std::collections::HashSet<_> = initial
         .poker_slots
@@ -335,7 +339,73 @@ fn ldplayer_uses_a_full_height_column_and_cross_swap_moves_the_club_pair() {
 }
 
 #[test]
-fn parking_a_left_ldplayer_column_does_not_move_active_clubgg_tables() {
+fn over_four_layout_never_undoes_a_manual_mixed_column_swap() {
+    let backend = MockBackend::with_tables(4);
+    backend
+        .candidates
+        .lock()
+        .unwrap()
+        .push(ldplayer_candidate(9));
+    let store = ConfigStore::at(temp_config_path("stable-over-four-mixed-order"));
+    let handle = spawn_controller(Arc::new(backend.clone()), AppConfig::default(), store);
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 5);
+
+    handle
+        .commands
+        .send(ControllerCommand::MoveToSlot {
+            source: WindowId(9),
+            destination: PokerSlotId::club(0, 0),
+        })
+        .unwrap();
+    let swapped = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot.poker_slots.first().is_some_and(|slot| {
+            slot.id == PokerSlotId::full_height(0) && slot.occupant == Some(WindowId(9))
+        })
+    });
+    let spatial_order: Vec<_> = swapped
+        .poker_slots
+        .iter()
+        .filter_map(|slot| slot.occupant)
+        .collect();
+    assert_eq!(
+        spatial_order,
+        vec![
+            WindowId(9),
+            WindowId(3),
+            WindowId(4),
+            WindowId(1),
+            WindowId(2)
+        ]
+    );
+
+    backend.candidates.lock().unwrap().push(candidate(6));
+    handle
+        .commands
+        .send(ControllerCommand::ForceArrange)
+        .unwrap();
+    let added = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 6);
+    let spatial_order: Vec<_> = added
+        .poker_slots
+        .iter()
+        .filter_map(|slot| slot.occupant)
+        .collect();
+    assert_eq!(
+        spatial_order,
+        vec![
+            WindowId(9),
+            WindowId(3),
+            WindowId(4),
+            WindowId(1),
+            WindowId(2),
+            WindowId(6)
+        ]
+    );
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
+fn parking_a_left_ldplayer_column_releases_its_width_without_reordering_clubgg() {
     let backend = MockBackend::with_tables(2);
     backend
         .candidates
@@ -347,7 +417,7 @@ fn parking_a_left_ldplayer_column_does_not_move_active_clubgg_tables() {
         auto_arrange: false,
         ..AppConfig::default()
     };
-    let handle = spawn_controller(Arc::new(backend.clone()), config, store);
+    let handle = spawn_controller(Arc::new(backend.clone()), config, store.clone());
     let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 3);
 
     handle
@@ -383,22 +453,22 @@ fn parking_a_left_ldplayer_column_does_not_move_active_clubgg_tables() {
             .iter()
             .any(|table| table.id == WindowId(9) && !table.enabled)
     });
-    assert_eq!(
-        parked
-            .poker_slots
-            .iter()
-            .find(|slot| slot.occupant == Some(WindowId(1)))
-            .unwrap()
-            .rect,
-        active_rect
-    );
+    let released_rect = parked
+        .poker_slots
+        .iter()
+        .find(|slot| slot.occupant == Some(WindowId(1)))
+        .unwrap()
+        .rect;
+    assert_eq!(released_rect.left, 0);
+    assert_ne!(released_rect, active_rect);
+    assert!(store.load().unwrap().poker_placeholders.is_empty());
     assert!(
         backend
             .moves
             .lock()
             .unwrap()
             .iter()
-            .any(|(id, rect)| { *id == WindowId(1) && *rect == active_rect })
+            .any(|(id, rect)| { *id == WindowId(1) && *rect == released_rect })
     );
 
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
@@ -667,7 +737,7 @@ fn preserve_slots_auto_suppresses_above_four_tables_and_restores_after_park() {
 }
 
 #[test]
-fn more_than_four_active_tables_omit_placeholder_only_columns() {
+fn more_than_four_active_tables_never_move_others_to_close_a_non_park_hole() {
     let backend = MockBackend::with_tables(7);
     let store = ConfigStore::at(temp_config_path("omit-space-above-four"));
     let handle = spawn_controller(Arc::new(backend), AppConfig::default(), store.clone());
@@ -676,39 +746,86 @@ fn more_than_four_active_tables_omit_placeholder_only_columns() {
     handle
         .commands
         .send(ControllerCommand::SetWindowMode {
-            id: WindowId(7),
-            mode: WindowMode::Parked,
+            id: WindowId(4),
+            mode: WindowMode::Ignored,
         })
         .unwrap();
-    let six_active = wait_for_snapshot(&handle.snapshots, |snapshot| {
+    let parked = wait_for_snapshot(&handle.snapshots, |snapshot| {
         snapshot.preserve_table_slots_auto_suppressed
             && snapshot.tables.iter().filter(|table| table.enabled).count() == 6
-            && snapshot.poker_slots.len() == 6
+            && snapshot.poker_slots.len() == 8
     });
-    assert_eq!(
+    for (slot, id) in [
+        (PokerSlotId::club(0, 0), 1),
+        (PokerSlotId::club(0, 1), 2),
+        (PokerSlotId::club(1, 0), 3),
+        (PokerSlotId::club(2, 0), 5),
+        (PokerSlotId::club(2, 1), 6),
+        (PokerSlotId::club(3, 0), 7),
+    ] {
+        assert!(
+            parked
+                .poker_slots
+                .iter()
+                .any(|view| view.id == slot && view.occupant == Some(WindowId(id)))
+        );
+    }
+
+    handle
+        .commands
+        .send(ControllerCommand::MoveToSlot {
+            source: WindowId(6),
+            destination: PokerSlotId::club(1, 1),
+        })
+        .unwrap();
+    let six_active =
+        wait_for_snapshot(&handle.snapshots, |snapshot| {
+            snapshot.poker_slots.iter().any(|slot| {
+                slot.id == PokerSlotId::club(1, 1) && slot.occupant == Some(WindowId(6))
+            }) && snapshot.poker_slots.iter().any(|slot| {
+                slot.id == PokerSlotId::club(3, 0) && slot.occupant == Some(WindowId(7))
+            })
+        });
+    assert!(
         six_active
             .poker_slots
             .iter()
-            .map(|slot| slot.id.column)
-            .max(),
-        Some(2)
+            .any(|slot| { slot.id == PokerSlotId::club(2, 1) && slot.occupant.is_none() })
     );
+    for (slot, id) in [
+        (PokerSlotId::club(0, 0), 1),
+        (PokerSlotId::club(0, 1), 2),
+        (PokerSlotId::club(1, 0), 3),
+        (PokerSlotId::club(2, 0), 5),
+        (PokerSlotId::club(3, 0), 7),
+    ] {
+        assert!(
+            six_active
+                .poker_slots
+                .iter()
+                .any(|view| view.id == slot && view.occupant == Some(WindowId(id)))
+        );
+    }
     assert!(
         store
             .load()
             .unwrap()
             .poker_placeholders
-            .contains(&PokerSlotId::club(3, 0))
+            .contains(&PokerSlotId::club(2, 1))
     );
 
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
 
 #[test]
-fn parking_one_table_preserves_every_other_tables_slot() {
+fn parking_one_table_releases_its_slot_without_reordering_the_rest() {
     let backend = MockBackend::with_tables(2);
     let store = ConfigStore::at(temp_config_path("parked-slot-stability"));
-    let handle = spawn_controller(Arc::new(backend.clone()), AppConfig::default(), store);
+    let handle = spawn_controller(
+        Arc::new(backend.clone()),
+        AppConfig::default(),
+        store.clone(),
+    );
     let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 2);
 
     handle
@@ -728,9 +845,10 @@ fn parking_one_table_preserves_every_other_tables_slot() {
     });
     assert!(
         parked.poker_slots.iter().any(|slot| {
-            slot.id == PokerSlotId::club(0, 1) && slot.occupant == Some(WindowId(2))
+            slot.id == PokerSlotId::club(0, 0) && slot.occupant == Some(WindowId(2))
         })
     );
+    assert!(store.load().unwrap().poker_placeholders.is_empty());
     assert_eq!(
         parked
             .candidates
@@ -792,7 +910,7 @@ fn parking_one_table_preserves_every_other_tables_slot() {
     );
     assert!(
         closed.poker_slots.iter().any(|slot| {
-            slot.id == PokerSlotId::club(0, 1) && slot.occupant == Some(WindowId(2))
+            slot.id == PokerSlotId::club(0, 0) && slot.occupant == Some(WindowId(2))
         })
     );
 
@@ -800,7 +918,94 @@ fn parking_one_table_preserves_every_other_tables_slot() {
 }
 
 #[test]
-fn parking_many_tables_preserves_the_surviving_tables_column() {
+fn parking_creates_no_placeholder_and_unparking_uses_the_earliest_existing_hole() {
+    let backend = MockBackend::with_tables(5);
+    let store = ConfigStore::at(temp_config_path("park-without-placeholder"));
+    let handle = spawn_controller(
+        Arc::new(backend.clone()),
+        AppConfig::default(),
+        store.clone(),
+    );
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 5);
+
+    handle
+        .commands
+        .send(ControllerCommand::SetWindowMode {
+            id: WindowId(5),
+            mode: WindowMode::Parked,
+        })
+        .unwrap();
+    let parked = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot
+            .tables
+            .iter()
+            .any(|table| table.id == WindowId(5) && !table.enabled)
+    });
+    assert_eq!(
+        parked.poker_slots.iter().map(|slot| slot.id.column).max(),
+        Some(1)
+    );
+    assert!(store.load().unwrap().poker_placeholders.is_empty());
+
+    handle
+        .commands
+        .send(ControllerCommand::SetWindowMode {
+            id: WindowId(4),
+            mode: WindowMode::Parked,
+        })
+        .unwrap();
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot
+            .tables
+            .iter()
+            .filter(|table| !table.enabled)
+            .count()
+            == 2
+    });
+    handle
+        .commands
+        .send(ControllerCommand::MoveToSlot {
+            source: WindowId(1),
+            destination: PokerSlotId::club(1, 1),
+        })
+        .unwrap();
+    let _ = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot
+            .poker_slots
+            .iter()
+            .any(|slot| slot.id == PokerSlotId::club(0, 0) && slot.occupant.is_none())
+    });
+    assert_eq!(
+        store.load().unwrap().poker_placeholders,
+        vec![PokerSlotId::club(0, 0)]
+    );
+
+    handle
+        .commands
+        .send(ControllerCommand::SetWindowMode {
+            id: WindowId(5),
+            mode: WindowMode::Arranged,
+        })
+        .unwrap();
+    let unparked = wait_for_snapshot(&handle.snapshots, |snapshot| {
+        snapshot
+            .poker_slots
+            .iter()
+            .any(|slot| slot.id == PokerSlotId::club(0, 0) && slot.occupant == Some(WindowId(5)))
+    });
+    assert!(
+        unparked
+            .poker_slots
+            .iter()
+            .any(|slot| slot.occupant == Some(WindowId(2)))
+    );
+    assert!(store.load().unwrap().poker_placeholders.is_empty());
+
+    handle.commands.send(ControllerCommand::Shutdown).unwrap();
+}
+
+#[test]
+fn parking_many_tables_releases_slots_without_exceeding_baseline_space() {
     let backend = MockBackend::with_tables(6);
     let store = ConfigStore::at(temp_config_path("many-parked-tables-stable-column"));
     let config = AppConfig {
@@ -837,9 +1042,11 @@ fn parking_many_tables_preserves_the_surviving_tables_column() {
     assert!(parked.poker_slots.iter().all(|slot| !slot.parked));
     assert_eq!(
         parked.poker_slots.iter().map(|slot| slot.id.column).max(),
-        Some(2)
+        Some(1)
     );
-    assert_eq!(store.load().unwrap().poker_columns.len(), 3);
+    let saved = store.load().unwrap();
+    assert_eq!(saved.poker_columns.len(), 2);
+    assert!(saved.poker_placeholders.is_empty());
 
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
@@ -1824,7 +2031,7 @@ fn dragging_a_table_to_another_screen_slot_updates_and_persists_the_ui_order() {
 }
 
 #[test]
-fn closing_a_solo_column_keeps_its_placeholder_until_normal_assignment_reuses_it() {
+fn closing_a_solo_column_releases_its_space_without_a_placeholder() {
     let backend = MockBackend::with_tables(5);
     let store = ConfigStore::at(temp_config_path("closed-column-placeholder"));
     let config = AppConfig {
@@ -1844,17 +2051,12 @@ fn closing_a_solo_column_keeps_its_placeholder_until_normal_assignment_reuses_it
         .send(ControllerCommand::ForceArrange)
         .unwrap();
     let closed = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 4);
-    assert!(
-        closed
-            .poker_slots
-            .iter()
-            .any(|slot| { slot.id == PokerSlotId::club(2, 0) && slot.occupant.is_none() })
-    );
     assert_eq!(ids(&closed), vec![1, 2, 3, 4]);
     assert_eq!(
-        store.load().unwrap().poker_placeholders,
-        vec![PokerSlotId::club(2, 0)]
+        closed.poker_slots.iter().map(|slot| slot.id.column).max(),
+        Some(1)
     );
+    assert!(store.load().unwrap().poker_placeholders.is_empty());
 
     backend.candidates.lock().unwrap().push(candidate(6));
     handle
@@ -1874,7 +2076,7 @@ fn closing_a_solo_column_keeps_its_placeholder_until_normal_assignment_reuses_it
 }
 
 #[test]
-fn closing_one_identical_table_preserves_the_other_occurrences_exact_slot() {
+fn closing_one_identical_table_shifts_the_remaining_occurrence_forward() {
     let backend = MockBackend::with_tables(2);
     {
         let mut candidates = backend.candidates.lock().unwrap();
@@ -1900,14 +2102,8 @@ fn closing_one_identical_table_preserves_the_other_occurrences_exact_slot() {
         .unwrap();
     let closed = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 1);
     assert!(
-        closed
-            .poker_slots
-            .iter()
-            .any(|slot| { slot.id == PokerSlotId::club(0, 0) && slot.occupant.is_none() })
-    );
-    assert!(
         closed.poker_slots.iter().any(|slot| {
-            slot.id == PokerSlotId::club(0, 1) && slot.occupant == Some(WindowId(2))
+            slot.id == PokerSlotId::club(0, 0) && slot.occupant == Some(WindowId(2))
         })
     );
 
