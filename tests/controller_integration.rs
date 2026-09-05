@@ -405,7 +405,7 @@ fn over_four_layout_never_undoes_a_manual_mixed_column_swap() {
 }
 
 #[test]
-fn parking_a_left_ldplayer_column_releases_its_width_without_reordering_clubgg() {
+fn parking_a_left_ldplayer_column_keeps_clubgg_in_place() {
     let backend = MockBackend::with_tables(2);
     backend
         .candidates
@@ -459,8 +459,8 @@ fn parking_a_left_ldplayer_column_releases_its_width_without_reordering_clubgg()
         .find(|slot| slot.occupant == Some(WindowId(1)))
         .unwrap()
         .rect;
-    assert_eq!(released_rect.left, 0);
-    assert_ne!(released_rect, active_rect);
+    assert!(released_rect.left > 0);
+    assert_eq!(released_rect, active_rect);
     assert!(store.load().unwrap().poker_placeholders.is_empty());
     assert!(
         backend
@@ -525,7 +525,7 @@ fn full_height_ldplayer_never_reflows_narrower_than_its_natural_ratio() {
 }
 
 #[test]
-fn existing_ldplayer_assignment_reclaims_an_older_reserved_middle_column() {
+fn existing_ldplayer_assignment_keeps_its_saved_internal_gap() {
     let backend = MockBackend::with_tables(1);
     let ldplayer = ldplayer_candidate(9);
     backend.candidates.lock().unwrap().push(ldplayer.clone());
@@ -555,20 +555,11 @@ fn existing_ldplayer_assignment_reclaims_an_older_reserved_middle_column() {
             .find(|slot| slot.occupant == Some(WindowId(9)))
             .unwrap()
             .id,
-        PokerSlotId::full_height(1)
+        PokerSlotId::full_height(2)
     );
     let saved = store.load().unwrap();
-    assert_eq!(saved.poker_columns.len(), 2);
-    assert!(saved.poker_columns.iter().all(|column| {
-        !matches!(
-            column,
-            PokerColumnAssignment::Empty
-                | PokerColumnAssignment::ClubGg {
-                    top: None,
-                    bottom: None
-                }
-        )
-    }));
+    assert_eq!(saved.poker_columns.len(), 3);
+    assert_eq!(saved.poker_columns[1], PokerColumnAssignment::empty_club());
 
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
 }
@@ -845,7 +836,7 @@ fn parking_one_table_releases_its_slot_without_reordering_the_rest() {
     });
     assert!(
         parked.poker_slots.iter().any(|slot| {
-            slot.id == PokerSlotId::club(0, 0) && slot.occupant == Some(WindowId(2))
+            slot.id == PokerSlotId::club(0, 1) && slot.occupant == Some(WindowId(2))
         })
     );
     assert!(store.load().unwrap().poker_placeholders.is_empty());
@@ -910,7 +901,7 @@ fn parking_one_table_releases_its_slot_without_reordering_the_rest() {
     );
     assert!(
         closed.poker_slots.iter().any(|slot| {
-            slot.id == PokerSlotId::club(0, 0) && slot.occupant == Some(WindowId(2))
+            slot.id == PokerSlotId::club(0, 1) && slot.occupant == Some(WindowId(2))
         })
     );
 
@@ -1042,10 +1033,10 @@ fn parking_many_tables_releases_slots_without_exceeding_baseline_space() {
     assert!(parked.poker_slots.iter().all(|slot| !slot.parked));
     assert_eq!(
         parked.poker_slots.iter().map(|slot| slot.id.column).max(),
-        Some(1)
+        Some(2)
     );
     let saved = store.load().unwrap();
-    assert_eq!(saved.poker_columns.len(), 2);
+    assert_eq!(saved.poker_columns.len(), 3);
     assert!(saved.poker_placeholders.is_empty());
 
     handle.commands.send(ControllerCommand::Shutdown).unwrap();
@@ -2076,7 +2067,7 @@ fn closing_a_solo_column_releases_its_space_without_a_placeholder() {
 }
 
 #[test]
-fn closing_one_identical_table_shifts_the_remaining_occurrence_forward() {
+fn closing_one_identical_table_keeps_the_remaining_occurrence_in_place() {
     let backend = MockBackend::with_tables(2);
     {
         let mut candidates = backend.candidates.lock().unwrap();
@@ -2103,7 +2094,7 @@ fn closing_one_identical_table_shifts_the_remaining_occurrence_forward() {
     let closed = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 1);
     assert!(
         closed.poker_slots.iter().any(|slot| {
-            slot.id == PokerSlotId::club(0, 0) && slot.occupant == Some(WindowId(2))
+            slot.id == PokerSlotId::club(0, 1) && slot.occupant == Some(WindowId(2))
         })
     );
 
@@ -2215,4 +2206,105 @@ fn temp_config_path(label: &str) -> PathBuf {
         "clubgg-table-arranger-{}-{label}-{nonce}.json",
         std::process::id()
     ))
+}
+
+#[test]
+fn closing_internal_or_trailing_columns_keeps_surviving_rectangles() {
+    for removed in [[1, 2], [7, 8]] {
+        let backend = MockBackend::with_tables(8);
+        let store = ConfigStore::at(temp_config_path("stable-close-rectangles"));
+        let handle = spawn_controller(Arc::new(backend.clone()), AppConfig::default(), store);
+        let _ = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 8);
+        handle
+            .commands
+            .send(ControllerCommand::ForceArrange)
+            .unwrap();
+        let before = wait_for_snapshot(&handle.snapshots, |snapshot| {
+            snapshot
+                .tables
+                .iter()
+                .all(|table| table.status == TableStatus::Ready)
+        });
+        let rectangles: HashMap<_, _> = before
+            .poker_slots
+            .iter()
+            .filter_map(|slot| slot.occupant.map(|id| (id, (slot.id, slot.rect))))
+            .collect();
+        backend
+            .candidates
+            .lock()
+            .unwrap()
+            .retain(|candidate| !removed.contains(&candidate.id.0));
+        handle
+            .commands
+            .send(ControllerCommand::ForceArrange)
+            .unwrap();
+        let after = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 6);
+        for slot in &after.poker_slots {
+            if let Some(id) = slot.occupant {
+                assert_eq!((slot.id, slot.rect), rectangles[&id]);
+            }
+        }
+        handle.commands.send(ControllerCommand::Shutdown).unwrap();
+    }
+}
+
+#[test]
+fn park_and_unpark_same_named_tables_use_free_slots_without_moving_survivors() {
+    for preserve_table_slots in [false, true] {
+        let backend = MockBackend::with_tables(3);
+        {
+            let mut candidates = backend.candidates.lock().unwrap();
+            let signature = candidates[0].signature.clone();
+            for candidate in candidates.iter_mut() {
+                candidate.signature = signature.clone();
+            }
+        }
+        let store = ConfigStore::at(temp_config_path("stable-unpark-identical"));
+        let config = AppConfig {
+            preserve_table_slots,
+            ..AppConfig::default()
+        };
+        let handle = spawn_controller(Arc::new(backend), config, store);
+        let initial = wait_for_snapshot(&handle.snapshots, |snapshot| snapshot.tables.len() == 3);
+        let survivor = initial
+            .poker_slots
+            .iter()
+            .find(|slot| slot.occupant == Some(WindowId(2)))
+            .unwrap();
+        let expected = (survivor.id, survivor.rect);
+        for (id, mode) in [
+            (1, WindowMode::Parked),
+            (3, WindowMode::Parked),
+            (3, WindowMode::Arranged),
+            (1, WindowMode::Arranged),
+        ] {
+            handle
+                .commands
+                .send(ControllerCommand::SetWindowMode {
+                    id: WindowId(id),
+                    mode,
+                })
+                .unwrap();
+            let snapshot = wait_for_snapshot(&handle.snapshots, |snapshot| {
+                candidate_mode(snapshot, id) == mode
+            });
+            let survivor = snapshot
+                .poker_slots
+                .iter()
+                .find(|slot| slot.occupant == Some(WindowId(2)))
+                .unwrap();
+            assert_eq!((survivor.id, survivor.rect), expected);
+            if mode == WindowMode::Arranged && id == 3 {
+                assert!(
+                    snapshot
+                        .poker_slots
+                        .iter()
+                        .any(|slot| slot.id == PokerSlotId::club(0, 0)
+                            && slot.occupant == Some(WindowId(3)))
+                );
+            }
+        }
+        handle.commands.send(ControllerCommand::Shutdown).unwrap();
+    }
 }
